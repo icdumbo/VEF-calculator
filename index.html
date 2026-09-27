@@ -592,8 +592,11 @@ function exportToExcel() {
         '<?mso-application progid="Excel.Sheet"?>' +
         '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">' +
         '<Styles><Style ss:ID="Header"><Font ss:Bold="1"/><Interior ss:Color="#D9EAD3" ss:Pattern="Solid"/></Style></Styles>' +
-        '<Worksheet ss:Name="Summary"><Table>' + summaryXml + '</Table></Worksheet>' +
-        '<Worksheet ss:Name="Voyages"><Table>' + voyageXml + '</Table></Worksheet>' +
+        '<Worksheet ss:Name="VEF Calculator"><Table>' +
+        '<Row>' + stringCell("Summary", "Header") + '</Row>' + summaryXml +
+        '<Row/>' +
+        '<Row>' + stringCell("Voyages", "Header") + '</Row>' + voyageXml +
+        '</Table></Worksheet>' +
         '</Workbook>';
 
     const blob = new Blob([String.fromCharCode(0xFEFF), workbook], { type: "application/vnd.ms-excel;charset=utf-8" });
