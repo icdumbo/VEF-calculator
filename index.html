@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VEF Calculator - Loaded</title>
+
+<style>
+    body {
+        font-family: Arial, sans-serif;
+        margin: 0;
+        padding: 20px;
+        background: #f4f6f8;
+        color: #222;
+    }
+
+    .container {
+        max-width: 1400px;
+        margin: auto;
+    }
+
+    h1 {
+        text-align: center;
+        margin-bottom: 5px;
+    }
+
+    .subtitle {
+        text-align: center;
+        color: #666;
+        margin-bottom: 25px;
+    }
+
+    .table-container {
+        overflow-x: auto;
+        background: white;
+        border-radius: 10px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    }
+
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        min-width: 1100px;
+    }
+
+    th {
+        background: #1f2937;
+        color: white;
+        padding: 10px;
+        font-size: 14px;
+    }
+
+    td {
+        padding: 6px;
+        border-bottom: 1px solid #ddd;
+    }
+
+    input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 8px;
+        border: 1px solid #ccc;
+        border-radius: 5px;
+        font-size: 14px;
+    }
+
+    input[type="number"] {
+        text-align: right;
+    }
+
+    .calculated {
+        background: #f1f5f9;
+        text-align: right;
+        font-weight: bold;
+    }
+
+    .qualified-yes {
+        background: #dcfce7;
+        color: #166534;
+        font-weight: bold;
+        text-align: center;
+    }
+
+    .qualified-no {
+        background: #fee2e2;
+        color: #991b1b;
+        font-weight: bold;
+        text-align: center;
+    }
+
+    .buttons {
+        margin: 20px 0;
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+
+    button {
+        padding: 10px 16px;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: bold;
+    }
+
+    .add {
+        background: #2563eb;
+        color: white;
+    }
+
+    .calculate {
+        background: #16a34a;
+        color: white;
+    }
+
+    .clear {
+        background: #dc2626;
+        color: white;
+    }
+
+    .summary {
+        background: white;
+        margin-top: 20px;
+        padding: 20px;
+        border-radius: 10px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    }
+
+    .summary h2 {
+        margin-top: 0;
+    }
+
+    .summary-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 12px;
+    }
+
+    .summary-item {
+        background: #f8fafc;
+        padding: 12px;
+        border-radius: 6px;
+    }
+
+    .summary-label {
+        font-size: 13px;
+        color: #666;
+    }
+
+    .summary-value {
+        font-size: 20px;
+        font-weight: bold;
+        margin-top: 4px;
+    }
+
+    .vef-result {
+        margin-top: 20px;
+        padding: 20px;
+        background: #e0f2fe;
+        border-radius: 8px;
+        text-align: center;
+    }
+
+    .vef-result .label {
+        font-size: 16px;
+    }
+
+    .vef-result .value {
+        font-size: 36px;
+        font-weight: bold;
+        margin-top: 8px;
+    }
+
+    .outside {
+        margin-top: 15px;
+        padding: 12px;
+        background: #fff7ed;
+        border-radius: 6px;
+    }
+
+    .delete-btn {
+        background: #ef4444;
+        color: white;
+        padding: 6px 10px;
+    }
+
+    @media (max-width: 700px) {
+        body {
+            padding: 10px;
+        }
+
+        h1 {
+            font-size: 24px;
+        }
+    }
+</style>
+</head>
+
+<body>
+
+<div class="container">
+
+    <h1>VEF Calculator</h1>
+    <div class="subtitle">Loaded Voyages</div>
+
+    <div class="table-container">
+        <table id="vefTable">
+            <thead>
+                <tr>
+                    <th>Port / Terminal</th>
+                    <th>B/L Date</th>
+                    <th>Cargo</th>
+                    <th>Ship's Figures</th>
+                    <th>B/L Figures</th>
+                    <th>Difference</th>
+                    <th>V.L.R.</th>
+                    <th>Qualified</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+
+            <tbody id="tableBody">
+            </tbody>
+        </table>
+    </div>
+
+    <div class="buttons">
+        <button class="add" onclick="addRow()">+ Add Voyage</button>
+        <button class="calculate" onclick="calculateVEF()">Calculate VEF</button>
+        <button class="clear" onclick="clearAll()">Clear All</button>
+    </div>
+
+    <div class="summary">
+
+        <h2>VEF Summary</h2>
+
+        <div class="summary-grid">
+
+            <div class="summary-item">
+                <div class="summary-label">Total Ship's Figures</div>
+                <div class="summary-value" id="totalShip">0.000</div>
+            </div>
+
+            <div class="summary-item">
+                <div class="summary-label">Total B/L Figures</div>
+                <div class="summary-value" id="totalBL">0.000</div>
+            </div>
+
+            <div class="summary-item">
+                <div class="summary-label">Average Ratio</div>
+                <div class="summary-value" id="averageRatio">-</div>
+            </div>
+
+            <div class="summary-item">
+                <div class="summary-label">Lower Range</div>
+                <div class="summary-value" id="lowerRange">-</div>
+            </div>
+
+            <div class="summary-item">
+                <div class="summary-label">Upper Range</div>
+                <div class="summary-value" id="upperRange">-</div>
+            </div>
+
+            <div class="summary-item">
+                <div class="summary-label">Qualified Voyages</div>
+                <div class="summary-value" id="qualifiedCount">0</div>
+            </div>
+
+        </div>
+
+        <div class="outside">
+            <strong>Voyages outside range:</strong>
+            <span id="outsideRange">None</span>
+        </div>
+
+        <div class="vef-result">
+            <div class="label">LOAD V.E.F.</div>
+            <div class="value" id="finalVEF">-</div>
+        </div>
+
+    </div>
+
+</div>
+
+<script>
+
+let rowNumber = 0;
+
+function addRow() {
+
+    rowNumber++;
+
+    const tbody = document.getElementById("tableBody");
+
+    const row = document.createElement("tr");
+
+    row.innerHTML = `
+        <td>
+            <input type="text" class="port">
+        </td>
+
+        <td>
+            <input type="date" class="date">
+        </td>
+
+        <td>
+            <input type="text" class="cargo">
+        </td>
+
+        <td>
+            <input type="number" step="0.001" class="ship" oninput="calculateVEF()">
+        </td>
+
+        <td>
+            <input type="number" step="0.001" class="bl" oninput="calculateVEF()">
+        </td>
+
+        <td class="calculated difference">-</td>
+
+        <td class="calculated vlr">-</td>
+
+        <td class="qualified">-</td>
+
+        <td>
+            <button class="delete-btn" onclick="deleteRow(this)">Delete</button>
+        </td>
+    `;
+
+    tbody.appendChild(row);
+
+    calculateVEF();
+}
+
+
+function deleteRow(button) {
+
+    button.closest("tr").remove();
+
+    calculateVEF();
+}
+
+
+function calculateVEF() {
+
+    const rows = document.querySelectorAll("#tableBody tr");
+
+    let totalShip = 0;
+    let totalBL = 0;
+
+    let validRows = [];
+
+    rows.forEach((row) => {
+
+        const ship = parseFloat(row.querySelector(".ship").value);
+        const bl = parseFloat(row.querySelector(".bl").value);
+
+        const differenceCell = row.querySelector(".difference");
+        const vlrCell = row.querySelector(".vlr");
+        const qualifiedCell = row.querySelector(".qualified");
+
+        differenceCell.textContent = "-";
+        vlrCell.textContent = "-";
+
+        qualifiedCell.textContent = "-";
+        qualifiedCell.className = "qualified";
+
+        if (!isNaN(ship) && !isNaN(bl) && bl !== 0) {
+
+            const difference = ship - bl;
+            const vlr = ship / bl;
+
+            differenceCell.textContent = difference.toFixed(3);
+            vlrCell.textContent = vlr.toFixed(6);
+
+            totalShip += ship;
+            totalBL += bl;
+
+            validRows.push({
+                row: row,
+                vlr: vlr,
+                ship: ship,
+                bl: bl
+            });
+        }
+    });
+
+
+    document.getElementById("totalShip").textContent =
+        totalShip.toFixed(3);
+
+    document.getElementById("totalBL").textContent =
+        totalBL.toFixed(3);
+
+
+    if (validRows.length === 0 || totalBL === 0) {
+
+        document.getElementById("averageRatio").textContent = "-";
+        document.getElementById("lowerRange").textContent = "-";
+        document.getElementById("upperRange").textContent = "-";
+        document.getElementById("qualifiedCount").textContent = "0";
+        document.getElementById("outsideRange").textContent = "None";
+        document.getElementById("finalVEF").textContent = "-";
+
+        return;
+    }
+
+
+    // Average Ratio = Total Ship's Figures / Total B/L Figures
+    const averageRatio = totalShip / totalBL;
+
+    const lowerRange = averageRatio - 0.003;
+    const upperRange = averageRatio + 0.003;
+
+
+    document.getElementById("averageRatio").textContent =
+        averageRatio.toFixed(6);
+
+    document.getElementById("lowerRange").textContent =
+        lowerRange.toFixed(6);
+
+    document.getElementById("upperRange").textContent =
+        upperRange.toFixed(6);
+
+
+    let qualifiedCount = 0;
+    let qualifiedShip = 0;
+    let qualifiedBL = 0;
+
+    let outside = [];
+
+
+    validRows.forEach((item, index) => {
+
+        const qualified =
+            item.vlr >= lowerRange &&
+            item.vlr <= upperRange;
+
+        const cell = item.row.querySelector(".qualified");
+
+        if (qualified) {
+
+            cell.textContent = "YES";
+            cell.className = "qualified qualified-yes";
+
+            qualifiedCount++;
+
+            qualifiedShip += item.ship;
+            qualifiedBL += item.bl;
+
+        } else {
+
+            cell.textContent = "NO";
+            cell.className = "qualified qualified-no";
+
+            outside.push(index + 1);
+        }
+    });
+
+
+    document.getElementById("qualifiedCount").textContent =
+        qualifiedCount;
+
+
+    if (outside.length > 0) {
+        document.getElementById("outsideRange").textContent =
+            outside.join(", ");
+    } else {
+        document.getElementById("outsideRange").textContent =
+            "None";
+    }
+
+
+    // Final LOAD VEF
+    if (qualifiedBL > 0) {
+
+        const finalVEF = qualifiedShip / qualifiedBL;
+
+        document.getElementById("finalVEF").textContent =
+            finalVEF.toFixed(4);
+
+    } else {
+
+        document.getElementById("finalVEF").textContent =
+            "-";
+    }
+
+}
+
+
+function clearAll() {
+
+    if (!confirm("Clear all voyages?")) {
+        return;
+    }
+
+    document.getElementById("tableBody").innerHTML = "";
+
+    rowNumber = 0;
+
+    calculateVEF();
+
+    // Start with one empty row
+    addRow();
+}
+
+
+// Start with one empty row
+addRow();
+
+</script>
+
+</body>
+</html>
