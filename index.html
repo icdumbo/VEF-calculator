@@ -88,6 +88,13 @@
         text-align: center;
     }
 
+    input[type="checkbox"] {
+        width: auto;
+        display: block;
+        margin: auto;
+        transform: scale(1.2);
+    }
+
     .buttons {
         margin: 20px 0;
         display: flex;
@@ -216,6 +223,8 @@
                     <th>Difference</th>
                     <th>V.L.R.</th>
                     <th>Qualified</th>
+                    <th>Manual Exclude</th>
+                    <th>Reason (optional)</th>
                     <th>Action</th>
                 </tr>
             </thead>
@@ -323,6 +332,14 @@ function addRow() {
         <td class="qualified">-</td>
 
         <td>
+            <input type="checkbox" class="manual-exclude" aria-label="Manually exclude voyage" onchange="calculateVEF()">
+        </td>
+
+        <td>
+            <input type="text" class="reason" aria-label="Reason for exclusion (optional)">
+        </td>
+
+        <td>
             <button class="delete-btn" onclick="deleteRow(this)">Delete</button>
         </td>
     `;
@@ -358,6 +375,7 @@ function calculateVEF() {
         const differenceCell = row.querySelector(".difference");
         const vlrCell = row.querySelector(".vlr");
         const qualifiedCell = row.querySelector(".qualified");
+        const manuallyExcluded = row.querySelector(".manual-exclude").checked;
 
         differenceCell.textContent = "-";
         vlrCell.textContent = "-";
@@ -373,15 +391,20 @@ function calculateVEF() {
             differenceCell.textContent = difference.toFixed(3);
             vlrCell.textContent = vlr.toFixed(6);
 
-            totalShip += ship;
-            totalBL += bl;
+            if (manuallyExcluded) {
+                qualifiedCell.textContent = "NO";
+                qualifiedCell.className = "qualified qualified-no";
+            } else {
+                totalShip += ship;
+                totalBL += bl;
 
-            validRows.push({
-                row: row,
-                vlr: vlr,
-                ship: ship,
-                bl: bl
-            });
+                validRows.push({
+                    row: row,
+                    vlr: vlr,
+                    ship: ship,
+                    bl: bl
+                });
+            }
         }
     });
 
