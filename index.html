@@ -201,6 +201,22 @@
         background: #15803d;
     }
 
+    .report-download:empty {
+        display: none;
+    }
+
+    .report-download {
+        margin: 8px 0 16px;
+        padding: 10px 12px;
+        border-radius: 6px;
+        background: #dcfce7;
+    }
+
+    .download-link {
+        color: #166534;
+        font-weight: bold;
+    }
+
     .invalid-input { border-color: #dc2626 !important; background: #fef2f2; }
     .row-incomplete { background: #fff1f2; }
     .row-status { min-width: 155px; font-size: 12px; color: #991b1b; }
@@ -268,6 +284,7 @@
         <button class="export" onclick="openReportDialog()">Generate VEF Report</button>
     </div>
     <div id="validationSummary" class="validation-summary" role="status" aria-live="polite"></div>
+    <div id="reportDownload" class="report-download" aria-live="polite"></div>
 
     <section class="summary" aria-labelledby="historyHeading">
         <h2 id="historyHeading">VEF History / Saved Calculations</h2>
@@ -344,6 +361,7 @@ const HISTORY_STORAGE_KEY = "vef-calculator-history-v2";
 let currentCalculationId = createCalculationId();
 let isRestoringCalculation = false;
 let pendingHistoryExport = null;
+let activeReportUrl = null;
 
 function createCalculationId() {
     return "vef-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
@@ -1053,14 +1071,7 @@ function exportToExcel() {
 
     const zipBytes = joinBytes([...localParts, centralDirectory, endRecord]);
     const blob = new Blob([zipBytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "VEF-calculation.xlsx";
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    downloadReport(blob, "VEF-calculation.xlsx");
 }
 
 function openReportDialog() {
@@ -1106,14 +1117,18 @@ function restorePendingHistoryExport() {
 }
 
 function downloadReport(blob, filename) {
-    const url = URL.createObjectURL(blob);
+    if (activeReportUrl) URL.revokeObjectURL(activeReportUrl);
+    activeReportUrl = URL.createObjectURL(blob);
+    const downloadArea = document.getElementById("reportDownload");
+    downloadArea.textContent = "";
     const link = document.createElement("a");
-    link.href = url;
+    link.className = "download-link";
+    link.href = activeReportUrl;
     link.download = filename;
+    link.textContent = "Download " + filename;
     document.body.appendChild(link);
+    downloadArea.appendChild(link);
     link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function exportToPDF() {
@@ -1239,11 +1254,11 @@ function clearAll() {
 
 
 function initializeApp() {
-    document.getElementById("tableBody").addEventListener("input", () => calculateVEF());
-    document.getElementById("tableBody").addEventListener("change", () => calculateVEF());
+    document.getElementById("tableBody").addEventListener("input", () => { clearReportDownloadLink(); calculateVEF(); });
+    document.getElementById("tableBody").addEventListener("change", () => { clearReportDownloadLink(); calculateVEF(); });
     ["vesselName", "imoNumber", "calculationDate"].forEach(id => {
-        document.getElementById(id).addEventListener("input", () => calculateVEF());
-        document.getElementById(id).addEventListener("change", () => calculateVEF());
+        document.getElementById(id).addEventListener("input", () => { clearReportDownloadLink(); calculateVEF(); });
+        document.getElementById(id).addEventListener("change", () => { clearReportDownloadLink(); calculateVEF(); });
     });
     window.addEventListener("beforeunload", persistDraft);
     document.getElementById("reportDialog").addEventListener("close", restorePendingHistoryExport);
@@ -1256,6 +1271,15 @@ function initializeApp() {
     }
     renderHistory();
     persistDraft();
+}
+
+function clearReportDownloadLink() {
+    const downloadArea = document.getElementById("reportDownload");
+    if (downloadArea) downloadArea.textContent = "";
+    if (activeReportUrl) {
+        URL.revokeObjectURL(activeReportUrl);
+        activeReportUrl = null;
+    }
 }
 
 initializeApp();
