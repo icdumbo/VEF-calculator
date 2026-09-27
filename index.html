@@ -580,9 +580,9 @@ function exportToExcel() {
     const outsideParts = appRows.map((row, index) => {
         const excelRow = firstVoyageRow + index;
         const voyageNumber = index + 1;
-        return "IF(OR(H" + excelRow + "=\"NO\",I" + excelRow + "=\"YES\"),\"" + voyageNumber + "\",\"\")";
+        return "IF(OR(H" + excelRow + "=\"NO\",I" + excelRow + "=\"YES\"),\", " + voyageNumber + "\",\"\")";
     });
-    const outsideFormula = "IF(COUNTIF(" + colRange("H") + ",\"NO\")+COUNTIF(" + colRange("I") + ",\"YES\")=0,\"None\",TEXTJOIN(\", \" ,TRUE," + outsideParts.join(",") + "))";
+    const outsideFormula = "IF(COUNTIF(" + colRange("H") + ",\"NO\")+COUNTIF(" + colRange("I") + ",\"YES\")=0,\"None\",MID(CONCATENATE(" + outsideParts.join(",") + "),3,32767))";
     summaryRows.push("<row r=\"9\">" + inlineCell("A9", "Voyages Outside Range", 0) + formulaCell("B9", outsideFormula, summaryText("outsideRange") === "None" ? "None" : summaryText("outsideRange"), 0, "string") + "</row>");
     summaryRows.push("<row r=\"10\">" + inlineCell("A10", "LOAD V.E.F.", 0) + formulaCell("B10", "IFERROR(SUMIF(" + colRange("H") + ",\"YES\"," + colRange("D") + ")/SUMIF(" + colRange("H") + ",\"YES\"," + colRange("E") + "),\"\")", summaryValue("finalVEF"), 5, "number") + "</row>");
 
@@ -630,7 +630,7 @@ function exportToExcel() {
     const worksheetXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
         '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
         '<sheetViews><sheetView workbookViewId="0" showGridLines="1"/></sheetViews>' +
-        '<cols><col min="1" max="1" width="25" customWidth="1"/><col min="2" max="2" width="14" customWidth="1"/><col min="3" max="3" width="28" customWidth="1"/><col min="4" max="5" width="16" customWidth="1"/><col min="6" max="6" width="14" customWidth="1"/><col min="7" max="8" width="13" customWidth="1"/><col min="9" max="9" width="15" customWidth="1"/><col min="10" max="10" width="25" customWidth="1"/></cols>' +
+        '<cols><col min="1" max="1" width="25" customWidth="1"/><col min="2" max="2" width="22" customWidth="1"/><col min="3" max="3" width="28" customWidth="1"/><col min="4" max="5" width="16" customWidth="1"/><col min="6" max="6" width="14" customWidth="1"/><col min="7" max="8" width="13" customWidth="1"/><col min="9" max="9" width="15" customWidth="1"/><col min="10" max="10" width="25" customWidth="1"/></cols>' +
         '<sheetData>' + rowsXml + '</sheetData>' +
         '<mergeCells count="2"><mergeCell ref="A1:J1"/><mergeCell ref="A' + voyageHeadingRow + ':J' + voyageHeadingRow + '"/></mergeCells>' +
         '</worksheet>';
