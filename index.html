@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -192,6 +192,16 @@
         padding: 6px 10px;
     }
 
+    .invalid-input { border-color: #dc2626 !important; background: #fef2f2; }
+    .row-incomplete { background: #fff1f2; }
+    .row-status { min-width: 155px; font-size: 12px; color: #991b1b; }
+    .row-status.ready { color: #166534; }
+    .row-status.warning { color: #9a3412; }
+    .validation-summary { display: none; margin: 12px 0; padding: 12px; border-radius: 6px; }
+    .validation-summary.has-errors { display: block; color: #991b1b; background: #fef2f2; }
+    .validation-summary.has-warnings { display: block; color: #9a3412; background: #fff7ed; }
+    .validation-summary.has-success { display: block; color: #166534; background: #dcfce7; }
+
     @media (max-width: 700px) {
         body {
             padding: 10px;
@@ -211,6 +221,12 @@
     <h1>VEF Calculator</h1>
     <div class="subtitle">Loaded Voyages</div>
 
+    <section class="summary-grid" aria-label="Vessel details">
+        <label class="summary-item">Vessel Name <input id="vesselName" type="text" autocomplete="off"></label>
+        <label class="summary-item">IMO Number (optional) <input id="imoNumber" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off"></label>
+        <label class="summary-item">Calculation Date <input id="calculationDate" type="date"></label>
+    </section>
+
     <div class="table-container">
         <table id="vefTable">
             <thead>
@@ -224,7 +240,8 @@
                     <th>V.L.R.</th>
                     <th>Qualified</th>
                     <th>Manual Exclude</th>
-                    <th>Reason (optional)</th>
+                    <th>Reason (required if excluded)</th>
+                    <th>Data status</th>
                     <th>Action</th>
                 </tr>
             </thead>
@@ -235,10 +252,28 @@
     </div>
 
     <div class="buttons">
+        <button class="add" onclick="newCalculation()">New Calculation</button>
         <button class="add" onclick="addRow()">+ Add Voyage</button>
-        <button class="calculate" onclick="calculateVEF()">Calculate VEF</button>
-        <button class="clear" onclick="clearAll()">Clear All</button>        <button class="calculate" onclick="exportToExcel()">Export to Excel</button>
+        <button class="calculate" onclick="calculateVEF(true)">Calculate VEF</button>
+        <button class="clear" onclick="clearAll()">Clear Current</button>
+        <button class="export" onclick="openReportDialog()">Generate VEF Report</button>
     </div>
+    <div id="validationSummary" class="validation-summary" role="status" aria-live="polite"></div>
+
+    <section class="summary" aria-labelledby="historyHeading">
+        <h2 id="historyHeading">VEF History / Saved Calculations</h2>
+        <div id="historyList" aria-live="polite">No saved calculations yet.</div>
+    </section>
+
+    <dialog id="reportDialog">
+        <h2>Generate VEF Report</h2>
+        <p>Choose a report format.</p>
+        <div class="buttons">
+            <button class="export" onclick="exportToExcel(); closeReportDialog()">Export Excel</button>
+            <button class="export" onclick="exportToPDF(); closeReportDialog()">Export PDF</button>
+            <button onclick="closeReportDialog()">Cancel</button>
+        </div>
+    </dialog>
 
     <div class="summary">
 
@@ -295,6 +330,173 @@
 <script>
 
 let rowNumber = 0;
+const DRAFT_STORAGE_KEY = "vef-calculator-current-v2";
+const HISTORY_STORAGE_KEY = "vef-calculator-history-v2";
+let currentCalculationId = createCalculationId();
+let isRestoringCalculation = false;
+let pendingHistoryExport = null;
+
+function createCalculationId() {
+    return "vef-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+}
+
+function todayDate() {
+    const now = new Date();
+    return new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+
+function getHistory() {
+    try { return JSON.parse(localStorage.getItem(HISTORY_STORAGE_KEY) || "[]"); }
+    catch (error) { return []; }
+}
+
+function collectCalculationState() {
+    const rows = Array.from(document.querySelectorAll("#tableBody tr")).map(row => ({
+        port: row.querySelector(".port").value,
+        date: row.querySelector(".date").value,
+        cargo: row.querySelector(".cargo").value,
+        ship: row.querySelector(".ship").value,
+        bl: row.querySelector(".bl").value,
+        manualExclude: row.querySelector(".manual-exclude").checked,
+        reason: row.querySelector(".reason").value
+    }));
+    return {
+        vesselName: document.getElementById("vesselName").value.trim(),
+        imoNumber: document.getElementById("imoNumber").value.trim(),
+        calculationDate: document.getElementById("calculationDate").value,
+        voyages: rows
+    };
+}
+
+function hasCalculationData(state) {
+    return !!(state.vesselName || state.imoNumber || state.voyages.some(v =>
+        v.port || v.date || v.cargo || v.ship || v.bl || v.manualExclude || v.reason));
+}
+
+function calculationSummary(state) {
+    const rows = Array.from(document.querySelectorAll("#tableBody tr"));
+    const filled = rows.filter(row => row.querySelector(".ship").value || row.querySelector(".bl").value || row.querySelector(".port").value || row.querySelector(".cargo").value);
+    return {
+        vef: document.getElementById("finalVEF").textContent,
+        voyageCount: filled.length,
+        status: document.getElementById("finalVEF").textContent !== "-" ? "Calculated" : "Draft"
+    };
+}
+
+function persistDraft() {
+    if (isRestoringCalculation) return;
+    try {
+        const state = collectCalculationState();
+        localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ id: currentCalculationId, data: state, savedAt: new Date().toISOString() }));
+        const history = getHistory();
+        const existing = history.findIndex(item => item.id === currentCalculationId);
+        if (existing >= 0 && hasCalculationData(state)) {
+            history[existing] = { ...history[existing], data: state, ...calculationSummary(state), updatedAt: new Date().toISOString() };
+            localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history));
+            renderHistory();
+        }
+    } catch (error) {
+        const validation = document.getElementById("validationSummary");
+        validation.className = "validation-summary has-warnings";
+        validation.textContent = "Autosave is unavailable in this browser. Export or save your work manually.";
+    }
+}
+
+function saveCurrentCalculation() {
+    const state = collectCalculationState();
+    if (!hasCalculationData(state)) return;
+    const history = getHistory();
+    const summary = calculationSummary(state);
+    const item = { id: currentCalculationId, data: state, ...summary, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    const existing = history.findIndex(entry => entry.id === currentCalculationId);
+    if (existing >= 0) history[existing] = { ...history[existing], ...item, createdAt: history[existing].createdAt };
+    else history.unshift(item);
+    try {
+        localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history));
+        localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ id: currentCalculationId, data: state, savedAt: new Date().toISOString() }));
+    } catch (error) {
+        const validation = document.getElementById("validationSummary");
+        validation.className = "validation-summary has-warnings";
+        validation.textContent = "This browser could not save the calculation. Export it to keep a copy.";
+    }
+    renderHistory();
+}
+
+function applyCalculationState(state, id) {
+    isRestoringCalculation = true;
+    currentCalculationId = id || createCalculationId();
+    document.getElementById("vesselName").value = state.vesselName || "";
+    document.getElementById("imoNumber").value = state.imoNumber || "";
+    document.getElementById("calculationDate").value = state.calculationDate || todayDate();
+    document.getElementById("tableBody").innerHTML = "";
+    rowNumber = 0;
+    const voyages = Array.isArray(state.voyages) ? state.voyages : [];
+    if (!voyages.length) addRow();
+    voyages.forEach(voyage => {
+        addRow();
+        const row = document.querySelectorAll("#tableBody tr")[document.querySelectorAll("#tableBody tr").length - 1];
+        row.querySelector(".port").value = voyage.port || "";
+        row.querySelector(".date").value = voyage.date || "";
+        row.querySelector(".cargo").value = voyage.cargo || "";
+        row.querySelector(".ship").value = voyage.ship || "";
+        row.querySelector(".bl").value = voyage.bl || "";
+        row.querySelector(".manual-exclude").checked = !!voyage.manualExclude;
+        row.querySelector(".reason").value = voyage.reason || "";
+    });
+    isRestoringCalculation = false;
+    calculateVEF();
+    persistDraft();
+}
+
+function renderHistory() {
+    const container = document.getElementById("historyList");
+    if (!container) return;
+    container.innerHTML = "";
+    const history = getHistory();
+    if (!history.length) { container.textContent = "No saved calculations yet."; return; }
+    const table = document.createElement("table");
+    table.innerHTML = "<thead><tr><th>Vessel</th><th>IMO</th><th>Calculation Date</th><th>VEF</th><th>Voyages</th><th>Status</th><th>Actions</th></tr></thead>";
+    const tbody = document.createElement("tbody");
+    history.forEach(item => {
+        const tr = document.createElement("tr");
+        [item.data?.vesselName || "Unnamed vessel", item.data?.imoNumber || "-", item.data?.calculationDate || "-", item.vef || "-", String(item.voyageCount || 0), item.status || "Draft"].forEach(value => {
+            const td = document.createElement("td"); td.textContent = value; tr.appendChild(td);
+        });
+        const actions = document.createElement("td");
+        [["Open / Edit", () => openCalculation(item.id)], ["Duplicate", () => duplicateCalculation(item.id)], ["Export", () => exportHistoryCalculation(item.id)], ["Delete", () => deleteCalculation(item.id)]].forEach(([label, action]) => {
+            const button = document.createElement("button"); button.textContent = label; button.addEventListener("click", action); actions.appendChild(button);
+        });
+        tr.appendChild(actions); tbody.appendChild(tr);
+    });
+    table.appendChild(tbody); container.appendChild(table);
+}
+
+function openCalculation(id) {
+    const item = getHistory().find(entry => entry.id === id);
+    if (item) applyCalculationState(item.data, item.id);
+}
+
+function duplicateCalculation(id) {
+    const item = getHistory().find(entry => entry.id === id);
+    if (!item) return;
+    applyCalculationState(JSON.parse(JSON.stringify(item.data)), createCalculationId());
+    saveCurrentCalculation();
+}
+
+function deleteCalculation(id) {
+    if (!confirm("Delete this saved calculation? This cannot be undone.")) return;
+    localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(getHistory().filter(item => item.id !== id)));
+    if (currentCalculationId === id) currentCalculationId = createCalculationId();
+    renderHistory();
+}
+
+function exportHistoryCalculation(id) {
+    const item = getHistory().find(entry => entry.id === id);
+    if (!item) return;
+    pendingHistoryExport = { id: currentCalculationId, data: collectCalculationState() };
+    applyCalculationState(item.data, item.id);
+    openReportDialog();
+}
 
 function addRow() {
 
@@ -318,11 +520,11 @@ function addRow() {
         </td>
 
         <td>
-            <input type="number" step="0.001" class="ship" oninput="calculateVEF()">
+            <input type="number" min="0" step="0.001" class="ship" aria-label="Ship Quantity (required)" oninput="calculateVEF()">
         </td>
 
         <td>
-            <input type="number" step="0.001" class="bl" oninput="calculateVEF()">
+            <input type="number" min="0" step="0.001" class="bl" aria-label="B/L Quantity (required)" oninput="calculateVEF()">
         </td>
 
         <td class="calculated difference">-</td>
@@ -336,8 +538,10 @@ function addRow() {
         </td>
 
         <td>
-            <input type="text" class="reason" aria-label="Reason for exclusion (optional)">
+            <input type="text" class="reason" aria-label="Reason for exclusion (required if manually excluded)" oninput="calculateVEF()">
         </td>
+
+        <td class="row-status" aria-live="polite">Incomplete: enter Ship and B/L quantities</td>
 
         <td>
             <button class="delete-btn" onclick="deleteRow(this)">Delete</button>
@@ -358,7 +562,7 @@ function deleteRow(button) {
 }
 
 
-function calculateVEF() {
+function calculateVEF(showValidation = false) {
 
     const rows = document.querySelectorAll("#tableBody tr");
 
@@ -367,16 +571,60 @@ function calculateVEF() {
 
     let validRows = [];
     let outside = [];
+    const issues = [];
 
     rows.forEach((row, rowIndex) => {
 
-        const ship = parseFloat(row.querySelector(".ship").value);
-        const bl = parseFloat(row.querySelector(".bl").value);
+        const shipInput = row.querySelector(".ship");
+        const blInput = row.querySelector(".bl");
+        const reasonInput = row.querySelector(".reason");
+        const ship = shipInput.value.trim() === "" || shipInput.validity.badInput ? NaN : Number(shipInput.value);
+        const bl = blInput.value.trim() === "" || blInput.validity.badInput ? NaN : Number(blInput.value);
 
         const differenceCell = row.querySelector(".difference");
         const vlrCell = row.querySelector(".vlr");
         const qualifiedCell = row.querySelector(".qualified");
         const manuallyExcluded = row.querySelector(".manual-exclude").checked;
+        const statusCell = row.querySelector(".row-status");
+        const errors = [];
+        const warning = Number.isFinite(ship) && Number.isFinite(bl) && bl > 0 && Math.abs(ship - bl) / bl >= 0.05;
+
+        [shipInput, blInput, reasonInput].forEach(input => input.classList.remove("invalid-input"));
+        row.classList.remove("row-incomplete");
+
+        if (shipInput.validity.stepMismatch) {
+            errors.push("Ship Quantity must use no more than three decimal places");
+            shipInput.classList.add("invalid-input");
+        } else if (!Number.isFinite(ship) || ship <= 0) {
+            errors.push(shipInput.validity.badInput || (shipInput.value.trim() !== "" && ship < 0) ? "Ship Quantity must be a valid positive number" : "Ship Quantity is required");
+            shipInput.classList.add("invalid-input");
+        }
+        if (blInput.validity.stepMismatch) {
+            errors.push("B/L Quantity must use no more than three decimal places");
+            blInput.classList.add("invalid-input");
+        } else if (!Number.isFinite(bl) || bl <= 0) {
+            errors.push(blInput.validity.badInput || (blInput.value.trim() !== "" && bl < 0) ? "B/L Quantity must be a valid positive number" : "B/L Quantity is required and must be greater than zero");
+            blInput.classList.add("invalid-input");
+        }
+        if (manuallyExcluded && !reasonInput.value.trim()) {
+            errors.push("Reason is required when Manual Exclude is YES");
+            reasonInput.classList.add("invalid-input");
+        }
+        reasonInput.required = manuallyExcluded;
+        reasonInput.setAttribute("aria-required", manuallyExcluded ? "true" : "false");
+        if (errors.length) {
+            row.classList.add("row-incomplete");
+            statusCell.textContent = "Incomplete: " + errors.join("; ");
+            statusCell.className = "row-status";
+            issues.push("Voyage " + (rowIndex + 1) + ": " + errors.join("; "));
+        } else if (warning) {
+            statusCell.textContent = "Warning: difference is at least 5% of B/L";
+            statusCell.className = "row-status warning";
+            issues.push("Voyage " + (rowIndex + 1) + ": Ship/B/L difference is at least 5%; check whether it is justified.");
+        } else {
+            statusCell.textContent = "Complete";
+            statusCell.className = "row-status ready";
+        }
 
         if (manuallyExcluded) {
             outside.push(rowIndex + 1);
@@ -388,7 +636,7 @@ function calculateVEF() {
         qualifiedCell.textContent = "-";
         qualifiedCell.className = "qualified";
 
-        if (!isNaN(ship) && !isNaN(bl) && bl !== 0) {
+        if (Number.isFinite(ship) && Number.isFinite(bl) && ship > 0 && bl > 0) {
 
             const difference = ship - bl;
             const vlr = ship / bl;
@@ -396,7 +644,10 @@ function calculateVEF() {
             differenceCell.textContent = difference.toFixed(3);
             vlrCell.textContent = vlr.toFixed(6);
 
-            if (manuallyExcluded) {
+            if (errors.length) {
+                qualifiedCell.textContent = manuallyExcluded ? "NO" : "-";
+                qualifiedCell.className = manuallyExcluded ? "qualified qualified-no" : "qualified";
+            } else if (manuallyExcluded) {
                 qualifiedCell.textContent = "NO";
                 qualifiedCell.className = "qualified qualified-no";
             } else {
@@ -413,12 +664,27 @@ function calculateVEF() {
         }
     });
 
+    const imoInput = document.getElementById("imoNumber");
+    const invalidIMO = !!imoInput.value.trim() && !/^\d+$/.test(imoInput.value.trim());
+    imoInput.classList.toggle("invalid-input", invalidIMO);
+    if (invalidIMO) issues.push("IMO Number must contain digits only.");
+
 
     document.getElementById("totalShip").textContent =
         totalShip.toFixed(3);
 
     document.getElementById("totalBL").textContent =
         totalBL.toFixed(3);
+
+    const validation = document.getElementById("validationSummary");
+    validation.className = "validation-summary";
+    if (issues.length) {
+        const hasError = invalidIMO || Array.from(rows).some(row => row.classList.contains("row-incomplete"));
+        validation.classList.add(hasError ? "has-errors" : "has-warnings");
+        validation.textContent = (hasError ? "Incomplete voyages are excluded from the calculation. " : "Review these warnings. ") + issues.join(" ");
+    } else {
+        validation.textContent = "";
+    }
 
 
     if (validRows.length === 0 || totalBL === 0) {
@@ -427,9 +693,16 @@ function calculateVEF() {
         document.getElementById("lowerRange").textContent = "-";
         document.getElementById("upperRange").textContent = "-";
         document.getElementById("qualifiedCount").textContent = "0";
-        document.getElementById("outsideRange").textContent =
-            outside.length > 0 ? outside.sort((a, b) => a - b).join(", ") : "None";
+        outside.sort((a, b) => a - b);
+        document.getElementById("outsideRange").textContent = outside.length ? outside.join(", ") : "None";
         document.getElementById("finalVEF").textContent = "-";
+
+        if (showValidation && issues.length === 0) {
+            validation.className = "validation-summary has-success";
+            validation.textContent = "Calculation updated. All complete voyages were checked.";
+        }
+
+        persistDraft();
 
         return;
     }
@@ -498,6 +771,11 @@ function calculateVEF() {
             "None";
     }
 
+    if (showValidation && issues.length === 0) {
+        validation.className = "validation-summary has-success";
+        validation.textContent = "Calculation updated. All complete voyages were checked.";
+    }
+
 
     // Final LOAD VEF
     if (qualifiedBL > 0) {
@@ -512,6 +790,8 @@ function calculateVEF() {
         document.getElementById("finalVEF").textContent =
             "-";
     }
+
+    persistDraft();
 
 }
 
@@ -556,11 +836,11 @@ function exportToExcel() {
     const lastVoyageRow = firstVoyageRow + appRows.length - 1;
     const excelColumns = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"];
     const summaryValue = (id) => {
-        const value = document.getElementById(id).textContent.trim();
+        const value = String(document.getElementById(id).textContent).trim();
         const parsed = Number(value);
         return Number.isFinite(parsed) ? parsed : "";
     };
-    const summaryText = (id) => document.getElementById(id).textContent.trim();
+    const summaryText = (id) => String(document.getElementById(id).textContent).trim();
     const asNumber = (value) => {
         const parsed = Number.parseFloat(value);
         return Number.isFinite(parsed) ? parsed : "";
@@ -569,9 +849,11 @@ function exportToExcel() {
 
     const summaryRows = [];
     summaryRows.push("<row r=\"1\">" + inlineCell("A1", "VEF CALCULATION SUMMARY (LOADED VOYAGES)", 1) + "</row>");
-    summaryRows.push("<row r=\"2\">" + inlineCell("A2", "Metric", 2) + inlineCell("B2", "Value", 2) + "</row>");
-    summaryRows.push("<row r=\"3\">" + inlineCell("A3", "Total Ship's Figures", 0) + formulaCell("B3", "SUMIFS(" + colRange("D") + "," + colRange("I") + ",\"NO\"," + colRange("D") + ",\"<>\"," + colRange("E") + ",\"<>\"," + colRange("E") + ",\"<>0\")", summaryValue("totalShip"), 3) + "</row>");
-    summaryRows.push("<row r=\"4\">" + inlineCell("A4", "Total B/L Figures", 0) + formulaCell("B4", "SUMIFS(" + colRange("E") + "," + colRange("I") + ",\"NO\"," + colRange("D") + ",\"<>\"," + colRange("E") + ",\"<>\"," + colRange("E") + ",\"<>0\")", summaryValue("totalBL"), 3) + "</row>");
+    summaryRows.push("<row r=\"2\">" + inlineCell("A2", "Metric", 2) + inlineCell("B2", "Value", 2) + inlineCell("C2", "Vessel Name", 0) + inlineCell("D2", document.getElementById("vesselName").value, 6) + "</row>");
+    summaryRows.push("<row r=\"3\">" + inlineCell("C3", "IMO Number", 0) + inlineCell("D3", document.getElementById("imoNumber").value, 6) + "</row>");
+    summaryRows.push("<row r=\"4\">" + inlineCell("C4", "Calculation Date", 0) + inlineCell("D4", document.getElementById("calculationDate").value, 6) + "</row>");
+    summaryRows.push("<row r=\"3\">" + inlineCell("A3", "Total Ship's Figures", 0) + formulaCell("B3", "SUMIFS(" + colRange("D") + "," + colRange("I") + ",\"NO\"," + colRange("D") + ",\">0\"," + colRange("E") + ",\">0\")", summaryValue("totalShip"), 3) + "</row>");
+    summaryRows.push("<row r=\"4\">" + inlineCell("A4", "Total B/L Figures", 0) + formulaCell("B4", "SUMIFS(" + colRange("E") + "," + colRange("I") + ",\"NO\"," + colRange("D") + ",\">0\"," + colRange("E") + ",\">0\")", summaryValue("totalBL"), 3) + "</row>");
     summaryRows.push("<row r=\"5\">" + inlineCell("A5", "Average Ratio", 0) + formulaCell("B5", "IF(B4=0,\"\",B3/B4)", summaryValue("averageRatio"), 4, "number") + "</row>");
     summaryRows.push("<row r=\"6\">" + inlineCell("A6", "Lower Range", 0) + formulaCell("B6", "IF(B5=\"\",\"\",B5-0.003)", summaryValue("lowerRange"), 4, "number") + "</row>");
     summaryRows.push("<row r=\"7\">" + inlineCell("A7", "Upper Range", 0) + formulaCell("B7", "IF(B5=\"\",\"\",B5+0.003)", summaryValue("upperRange"), 4, "number") + "</row>");
@@ -588,7 +870,7 @@ function exportToExcel() {
 
     const voyageHeaders = [
         "Port / Terminal", "B/L Date", "Cargo", "Ship's Figures", "B/L Figures",
-        "Difference", "V.L.R.", "Qualified", "Manual Exclude", "Reason (optional)"
+        "Difference", "V.L.R.", "Qualified", "Manual Exclude", "Reason (required if excluded)"
     ];
     const voyageRowsXml = appRows.map((row, index) => {
         const excelRow = firstVoyageRow + index;
@@ -605,16 +887,16 @@ function exportToExcel() {
         const vlrValue = validFigures ? ship / bl : "";
         const qualifiedValue = appQualified === "YES" || appQualified === "NO" ? appQualified : "";
         const cellParts = [
-            inlineCell("A" + excelRow, row.querySelector(".port").value, 0),
-            inlineCell("B" + excelRow, row.querySelector(".date").value, 0),
-            inlineCell("C" + excelRow, row.querySelector(".cargo").value, 0),
-            numberCell("D" + excelRow, ship, 3),
-            numberCell("E" + excelRow, bl, 3),
-            formulaCell("F" + excelRow, "IF(OR(D" + excelRow + "=\"\",E" + excelRow + "=\"\",E" + excelRow + "=0),\"\",D" + excelRow + "-E" + excelRow + ")", differenceValue, 3, "number"),
-            formulaCell("G" + excelRow, "IF(OR(D" + excelRow + "=\"\",E" + excelRow + "=\"\",E" + excelRow + "=0),\"\",D" + excelRow + "/E" + excelRow + ")", vlrValue, 4, "number"),
-            formulaCell("H" + excelRow, "IF(OR(D" + excelRow + "=\"\",E" + excelRow + "=\"\",E" + excelRow + "=0),\"\",IF(I" + excelRow + "=\"YES\",\"NO\",IF($B$5=\"\",\"\",IF(AND(G" + excelRow + ">=$B$6,G" + excelRow + "<=$B$7),\"YES\",\"NO\"))))", qualifiedValue, 0, "string"),
-            inlineCell("I" + excelRow, manualText, 0),
-            inlineCell("J" + excelRow, row.querySelector(".reason").value, 0)
+            inlineCell("A" + excelRow, row.querySelector(".port").value, 6),
+            inlineCell("B" + excelRow, row.querySelector(".date").value, 6),
+            inlineCell("C" + excelRow, row.querySelector(".cargo").value, 6),
+            numberCell("D" + excelRow, ship, 7),
+            numberCell("E" + excelRow, bl, 7),
+            formulaCell("F" + excelRow, "IF(OR(D" + excelRow + "<=0,E" + excelRow + "<=0),\"\",D" + excelRow + "-E" + excelRow + ")", differenceValue, 3, "number"),
+            formulaCell("G" + excelRow, "IF(OR(D" + excelRow + "<=0,E" + excelRow + "<=0),\"\",D" + excelRow + "/E" + excelRow + ")", vlrValue, 4, "number"),
+            formulaCell("H" + excelRow, "IF(OR(D" + excelRow + "<=0,E" + excelRow + "<=0),\"\",IF(I" + excelRow + "=\"YES\",\"NO\",IF($B$5=\"\",\"\",IF(AND(G" + excelRow + ">=$B$6,G" + excelRow + "<=$B$7),\"YES\",\"NO\"))))", qualifiedValue, 0, "string"),
+            inlineCell("I" + excelRow, manualText, 6),
+            inlineCell("J" + excelRow, row.querySelector(".reason").value, 6)
         ];
         return "<row r=\"" + excelRow + "\">" + cellParts.join("") + "</row>";
     }).join("");
@@ -632,7 +914,9 @@ function exportToExcel() {
         '<sheetViews><sheetView workbookViewId="0" showGridLines="1"/></sheetViews>' +
         '<cols><col min="1" max="1" width="25" customWidth="1"/><col min="2" max="2" width="22" customWidth="1"/><col min="3" max="3" width="28" customWidth="1"/><col min="4" max="5" width="16" customWidth="1"/><col min="6" max="6" width="14" customWidth="1"/><col min="7" max="8" width="13" customWidth="1"/><col min="9" max="9" width="15" customWidth="1"/><col min="10" max="10" width="25" customWidth="1"/></cols>' +
         '<sheetData>' + rowsXml + '</sheetData>' +
+        '<sheetProtection sheet="1" objects="1" scenarios="1" selectLockedCells="0" selectUnlockedCells="1" formatCells="0" formatColumns="0" formatRows="0" insertRows="0" insertColumns="0" deleteRows="0" deleteColumns="0" sort="0" autoFilter="0" pivotTables="0"/>' +
         '<mergeCells count="2"><mergeCell ref="A1:J1"/><mergeCell ref="A' + voyageHeadingRow + ':J' + voyageHeadingRow + '"/></mergeCells>' +
+        '<dataValidations count="3"><dataValidation type="decimal" operator="greaterThan" allowBlank="1" showErrorMessage="1" errorTitle="Invalid Quantity" error="Enter a positive numeric quantity." sqref="D' + firstVoyageRow + ':D' + lastVoyageRow + ' E' + firstVoyageRow + ':E' + lastVoyageRow + '"/><dataValidation type="list" allowBlank="1" showErrorMessage="1" errorTitle="Invalid Selection" error="Choose YES or NO." sqref="I' + firstVoyageRow + ':I' + lastVoyageRow + '"><formula1>&quot;YES,NO&quot;</formula1></dataValidation><dataValidation type="custom" allowBlank="1" showErrorMessage="1" errorTitle="Reason required" error="Enter a reason when Manual Exclude is YES." sqref="J' + firstVoyageRow + ':J' + lastVoyageRow + '"><formula1>OR($I' + firstVoyageRow + '&lt;&gt;&quot;YES&quot;,$J' + firstVoyageRow + '&lt;&gt;&quot;&quot;)</formula1></dataValidation></dataValidations>' +
         '</worksheet>';
 
     const workbookXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
@@ -647,7 +931,7 @@ function exportToExcel() {
         '<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFD9EAD3"/><bgColor indexed="64"/></patternFill></fill></fills>' +
         '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>' +
         '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
-        '<cellXfs count="6"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/><xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="166" fontId="1" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1"/></cellXfs>' +
+        '<cellXfs count="8"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/><xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="166" fontId="1" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1"/><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyProtection="1"><protection locked="0"/></xf><xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyProtection="1"><protection locked="0"/></xf></cellXfs>' +
         '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>';
 
     const contentTypesXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
@@ -770,27 +1054,180 @@ function exportToExcel() {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+function openReportDialog() {
+    const dialog = document.getElementById("reportDialog");
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else alert("Choose Export Excel or Export PDF in the report options.");
+}
 
+function closeReportDialog() {
+    const dialog = document.getElementById("reportDialog");
+    if (dialog.open) dialog.close();
+    restorePendingHistoryExport();
+}
 
-function clearAll() {
-    
-   if (!confirm("Clear all voyages?")) {
-        return;
+function restorePendingHistoryExport() {
+    if (pendingHistoryExport) {
+        const prior = pendingHistoryExport;
+        pendingHistoryExport = null;
+        applyCalculationState(prior.data, prior.id);
+    }
+}
+
+function downloadReport(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function exportToPDF() {
+    calculateVEF();
+    const state = collectCalculationState();
+    const rows = Array.from(document.querySelectorAll("#tableBody tr")).filter(row => {
+        return [".port", ".date", ".cargo", ".ship", ".bl", ".reason"].some(selector => row.querySelector(selector).value.trim()) || row.querySelector(".manual-exclude").checked;
+    });
+    const ascii = value => String(value ?? "").normalize("NFKD").replace(/[^\x20-\x7E]/g, "?").replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+    const textOp = (x, y, value, size = 9, bold = false) => "BT /" + (bold ? "F2" : "F1") + " " + size + " Tf " + x.toFixed(1) + " " + y.toFixed(1) + " Td (" + ascii(value) + ") Tj ET\n";
+    const columns = [
+        ["Voyage / Port", 88, row => (row.querySelector(".port").value || "")],
+        ["B/L Date", 53, row => row.querySelector(".date").value],
+        ["Cargo", 125, row => row.querySelector(".cargo").value],
+        ["Ship Figure", 78, row => row.querySelector(".ship").value],
+        ["B/L Figure", 78, row => row.querySelector(".bl").value],
+        ["Difference", 61, row => row.querySelector(".difference").textContent],
+        ["V.L.R.", 55, row => row.querySelector(".vlr").textContent],
+        ["Qualified", 50, row => row.querySelector(".qualified").textContent],
+        ["Manual Excl.", 73, row => row.querySelector(".manual-exclude").checked ? "YES" : "NO"],
+        ["Reason", 127, row => row.querySelector(".reason").value]
+    ];
+    const pageContents = [];
+    const rowsPerPage = 23;
+    const pageCount = Math.max(1, Math.ceil(rows.length / rowsPerPage));
+    for (let pageIndex = 0; pageIndex < pageCount; pageIndex++) {
+        let content = "";
+        if (pageIndex === 0) {
+            content += textOp(28, 566, "VESSEL EXPERIENCE FACTOR - VEF CALCULATION", 16, true);
+            content += textOp(28, 545, "Vessel Name: " + (state.vesselName || "Not entered"), 10, true);
+            content += textOp(340, 545, "IMO Number: " + (state.imoNumber || "Not entered"), 10);
+            content += textOp(620, 545, "Calculation Date: " + (state.calculationDate || "Not entered"), 9);
+            content += textOp(28, 508, "FINAL LOAD V.E.F.", 12, true);
+            content += textOp(28, 476, document.getElementById("finalVEF").textContent, 26, true);
+            content += textOp(190, 504, "Average Ratio: " + document.getElementById("averageRatio").textContent, 10);
+            content += textOp(190, 484, "Lower Limit: " + document.getElementById("lowerRange").textContent, 10);
+            content += textOp(390, 484, "Upper Limit: " + document.getElementById("upperRange").textContent, 10);
+            content += textOp(190, 464, "Qualified Voyages: " + document.getElementById("qualifiedCount").textContent, 10);
+            content += textOp(390, 464, "Voyages Outside Range: " + document.getElementById("outsideRange").textContent, 10);
+            content += textOp(28, 439, "Total Ship's Figures: " + document.getElementById("totalShip").textContent, 9);
+            content += textOp(260, 439, "Total B/L Figures: " + document.getElementById("totalBL").textContent, 9);
+            const qualified = rows.map((row, index) => ({row, index:index+1})).filter(item => item.row.querySelector(".qualified").textContent === "YES").map(item => item.index);
+            const excluded = rows.map((row, index) => ({row, index:index+1})).filter(item => item.row.querySelector(".manual-exclude").checked).map(item => item.index + (item.row.querySelector(".reason").value.trim() ? " (" + item.row.querySelector(".reason").value.trim() + ")" : ""));
+            content += textOp(28, 418, "Voyages used in LOAD V.E.F.: " + (qualified.length ? qualified.join(", ") : "None"), 9);
+            content += textOp(28, 402, "Manually excluded voyages: " + (excluded.length ? excluded.join(", ") : "None"), 9);
+            content += textOp(28, 378, "LOADED VOYAGES", 10, true);
+        } else {
+            content += textOp(28, 566, "VESSEL EXPERIENCE FACTOR - VEF CALCULATION (continued)", 14, true);
+            content += textOp(28, 546, "Vessel: " + (state.vesselName || "Not entered") + " | IMO: " + (state.imoNumber || "Not entered"), 9);
+        }
+        const startY = pageIndex === 0 ? 358 : 522;
+        let x = 28;
+        columns.forEach(([heading, width]) => { content += textOp(x + 2, startY, heading, 6.5, true); x += width; });
+        content += "0.5 w 28 " + (startY - 5) + " m 814 " + (startY - 5) + " l S\n";
+        const slice = rows.slice(pageIndex * rowsPerPage, (pageIndex + 1) * rowsPerPage);
+        slice.forEach((row, rowIndex) => {
+            const y = startY - 18 - rowIndex * 14;
+            let columnX = 28;
+            columns.forEach(([heading, width, getter]) => {
+                let value = getter(row);
+                if (heading === "Voyage / Port") value = (pageIndex * rowsPerPage + rowIndex + 1) + ". " + value;
+                const maxChars = Math.max(5, Math.floor((width - 4) / 3.4));
+                content += textOp(columnX + 2, y, String(value || "").slice(0, maxChars), 6.5);
+                columnX += width;
+            });
+            content += "0.25 w 28 " + (y - 4) + " m 814 " + (y - 4) + " l S\n";
+        });
+        content += textOp(28, 18, "Loaded voyages only | Page " + (pageIndex + 1) + " of " + pageCount, 7);
+        pageContents.push(content);
     }
 
-    document.getElementById("tableBody").innerHTML = "";
-
-    rowNumber = 0;
-
-    calculateVEF();
-
-    // Start with one empty row
-    addRow();
+    const objects = [];
+    const pageObjectIds = pageContents.map((_, index) => 5 + index * 2);
+    objects[1] = "<< /Type /Catalog /Pages 2 0 R >>";
+    objects[2] = "<< /Type /Pages /Kids [" + pageObjectIds.map(id => id + " 0 R").join(" ") + "] /Count " + pageContents.length + " >>";
+    objects[3] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>";
+    objects[4] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>";
+    pageContents.forEach((content, index) => {
+        const pageId = 5 + index * 2;
+        const streamId = pageId + 1;
+        const parent = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 842 595] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents " + streamId + " 0 R >>";
+        objects[pageId] = parent;
+        objects[streamId] = "<< /Length " + content.length + " >>\nstream\n" + content + "endstream";
+    });
+    let pdf = "%PDF-1.4\n";
+    const offsets = [0];
+    for (let objectId = 1; objectId < objects.length; objectId++) {
+        offsets[objectId] = pdf.length;
+        pdf += objectId + " 0 obj\n" + objects[objectId] + "\nendobj\n";
+    }
+    const xrefOffset = pdf.length;
+    pdf += "xref\n0 " + objects.length + "\n0000000000 65535 f \n";
+    for (let objectId = 1; objectId < objects.length; objectId++) pdf += String(offsets[objectId]).padStart(10, "0") + " 00000 n \n";
+    pdf += "trailer\n<< /Size " + objects.length + " /Root 1 0 R >>\nstartxref\n" + xrefOffset + "\n%%EOF";
+    downloadReport(new Blob([pdf], {type:"application/pdf"}), "VEF-report.pdf");
 }
 
 
-// Start with one empty row
-addRow();
+
+function resetCalculationFields(calculationDate = todayDate()) {
+    document.getElementById("tableBody").innerHTML = "";
+    rowNumber = 0;
+    document.getElementById("vesselName").value = "";
+    document.getElementById("imoNumber").value = "";
+    document.getElementById("calculationDate").value = calculationDate;
+    addRow();
+}
+
+function newCalculation() {
+    if (typeof saveCurrentCalculation === "function") {
+        saveCurrentCalculation();
+    }
+    currentCalculationId = createCalculationId();
+    resetCalculationFields();
+}
+
+function clearAll() {
+    if (!confirm("Clear all data in the current VEF calculation? This cannot be undone.")) {
+        return;
+    }
+    resetCalculationFields("");
+}
+
+
+function initializeApp() {
+    document.getElementById("tableBody").addEventListener("input", () => calculateVEF());
+    document.getElementById("tableBody").addEventListener("change", () => calculateVEF());
+    ["vesselName", "imoNumber", "calculationDate"].forEach(id => {
+        document.getElementById(id).addEventListener("input", () => calculateVEF());
+        document.getElementById(id).addEventListener("change", () => calculateVEF());
+    });
+    window.addEventListener("beforeunload", persistDraft);
+    document.getElementById("reportDialog").addEventListener("close", restorePendingHistoryExport);
+    let draft = null;
+    try { draft = JSON.parse(localStorage.getItem(DRAFT_STORAGE_KEY) || "null"); } catch (error) { draft = null; }
+    if (draft?.data) applyCalculationState(draft.data, draft.id);
+    else {
+        document.getElementById("calculationDate").value = todayDate();
+        addRow();
+    }
+    renderHistory();
+    persistDraft();
+}
+
+initializeApp();
 
 </script>
 
