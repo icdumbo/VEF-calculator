@@ -529,13 +529,13 @@ function exportToExcel() {
         .join("");
 
     const stringCell = (value, style) =>
-        "<Cell" + (style ? " ss:StyleID="" + style + """ : "") + "><Data ss:Type="String">" + xmlEscape(value) + "</Data></Cell>";
+        "<Cell" + (style ? " ss:StyleID=\"" + style + "\"" : "") + "><Data ss:Type=\"String\">" + xmlEscape(value) + "</Data></Cell>";
 
     const numberCell = (value) => {
         if (value === "" || value === null || value === undefined) return stringCell("");
         const parsed = Number(value);
         return Number.isFinite(parsed)
-            ? "<Cell><Data ss:Type="Number">" + parsed + "</Data></Cell>"
+            ? "<Cell><Data ss:Type=\"Number\">" + parsed + "</Data></Cell>"
             : stringCell(value);
     };
 
