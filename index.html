@@ -237,7 +237,7 @@
     <div class="buttons">
         <button class="add" onclick="addRow()">+ Add Voyage</button>
         <button class="calculate" onclick="calculateVEF()">Calculate VEF</button>
-        <button class="clear" onclick="clearAll()">Clear All</button>
+        <button class="clear" onclick="clearAll()">Clear All</button>        <button class="calculate" onclick="exportToExcel()">Export to Excel</button>
     </div>
 
     <div class="summary">
@@ -511,9 +511,102 @@ function calculateVEF() {
 }
 
 
-function clearAll() {
+function exportToExcel() {
 
-    if (!confirm("Clear all voyages?")) {
+    calculateVEF();
+
+    const xmlEscape = (value) => String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&apos;")
+        .split("")
+        .filter((character) => {
+            const code = character.charCodeAt(0);
+            return code === 9 || code === 10 || code === 13 || code >= 32;
+        })
+        .join("");
+
+    const stringCell = (value, style) =>
+        "<Cell" + (style ? " ss:StyleID="" + style + """ : "") + "><Data ss:Type="String">" + xmlEscape(value) + "</Data></Cell>";
+
+    const numberCell = (value) => {
+        if (value === "" || value === null || value === undefined) return stringCell("");
+        const parsed = Number(value);
+        return Number.isFinite(parsed)
+            ? "<Cell><Data ss:Type="Number">" + parsed + "</Data></Cell>"
+            : stringCell(value);
+    };
+
+    const summaryRows = [
+        ["Metric", "Value"],
+        ["Total Ship's Figures (excluding manually excluded voyages)", document.getElementById("totalShip").textContent],
+        ["Total B/L Figures (excluding manually excluded voyages)", document.getElementById("totalBL").textContent],
+        ["Average Ratio", document.getElementById("averageRatio").textContent],
+        ["Lower Range", document.getElementById("lowerRange").textContent],
+        ["Upper Range", document.getElementById("upperRange").textContent],
+        ["Qualified Voyages", document.getElementById("qualifiedCount").textContent],
+        ["Voyages Outside Range", document.getElementById("outsideRange").textContent],
+        ["LOAD V.E.F.", document.getElementById("finalVEF").textContent]
+    ];
+    const numericSummaryRows = new Set([1, 2, 3, 4, 5, 6, 8]);
+    const summaryXml = summaryRows.map((cells, index) =>
+        "<Row>" +
+        stringCell(cells[0], index === 0 ? "Header" : "") +
+        (numericSummaryRows.has(index) ? numberCell(cells[1]) : stringCell(cells[1], index === 0 ? "Header" : "")) +
+        "</Row>"
+    ).join("");
+
+    const voyageHeaders = [
+        "Port / Terminal", "B/L Date", "Cargo", "Ship's Figures", "B/L Figures",
+        "Difference", "V.L.R.", "Qualified", "Manual Exclude", "Reason (optional)"
+    ];
+    const voyageRows = Array.from(document.querySelectorAll("#tableBody tr"));
+    const voyageXml = "<Row>" + voyageHeaders.map((header) => stringCell(header, "Header")).join("") + "</Row>" +
+        voyageRows.map((row) => {
+            const ship = row.querySelector(".ship").value;
+            const bl = row.querySelector(".bl").value;
+            const manuallyExcluded = row.querySelector(".manual-exclude").checked;
+            const cells = [
+                stringCell(row.querySelector(".port").value),
+                stringCell(row.querySelector(".date").value),
+                stringCell(row.querySelector(".cargo").value),
+                numberCell(ship),
+                numberCell(bl),
+                numberCell(row.querySelector(".difference").textContent === "-" ? "" : row.querySelector(".difference").textContent),
+                numberCell(row.querySelector(".vlr").textContent === "-" ? "" : row.querySelector(".vlr").textContent),
+                stringCell(row.querySelector(".qualified").textContent),
+                stringCell(manuallyExcluded ? "YES" : "NO"),
+                stringCell(row.querySelector(".reason").value)
+            ];
+            return "<Row>" + cells.join("") + "</Row>";
+        }).join("");
+
+    const workbook = '<?xml version="1.0" encoding="UTF-8"?>' +
+        '<?mso-application progid="Excel.Sheet"?>' +
+        '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">' +
+        '<Styles><Style ss:ID="Header"><Font ss:Bold="1"/><Interior ss:Color="#D9EAD3" ss:Pattern="Solid"/></Style></Styles>' +
+        '<Worksheet ss:Name="Summary"><Table>' + summaryXml + '</Table></Worksheet>' +
+        '<Worksheet ss:Name="Voyages"><Table>' + voyageXml + '</Table></Worksheet>' +
+        '</Workbook>';
+
+    const blob = new Blob([String.fromCharCode(0xFEFF), workbook], { type: "application/vnd.ms-excel;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "VEF-calculation.xml";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+
+
+function clearAll() {
+    
+   if (!confirm("Clear all voyages?")) {
         return;
     }
 
