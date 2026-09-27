@@ -366,8 +366,9 @@ function calculateVEF() {
     let totalBL = 0;
 
     let validRows = [];
+    let outside = [];
 
-    rows.forEach((row) => {
+    rows.forEach((row, rowIndex) => {
 
         const ship = parseFloat(row.querySelector(".ship").value);
         const bl = parseFloat(row.querySelector(".bl").value);
@@ -376,6 +377,10 @@ function calculateVEF() {
         const vlrCell = row.querySelector(".vlr");
         const qualifiedCell = row.querySelector(".qualified");
         const manuallyExcluded = row.querySelector(".manual-exclude").checked;
+
+        if (manuallyExcluded) {
+            outside.push(rowIndex + 1);
+        }
 
         differenceCell.textContent = "-";
         vlrCell.textContent = "-";
@@ -422,7 +427,8 @@ function calculateVEF() {
         document.getElementById("lowerRange").textContent = "-";
         document.getElementById("upperRange").textContent = "-";
         document.getElementById("qualifiedCount").textContent = "0";
-        document.getElementById("outsideRange").textContent = "None";
+        document.getElementById("outsideRange").textContent =
+            outside.length > 0 ? outside.sort((a, b) => a - b).join(", ") : "None";
         document.getElementById("finalVEF").textContent = "-";
 
         return;
@@ -449,9 +455,6 @@ function calculateVEF() {
     let qualifiedCount = 0;
     let qualifiedShip = 0;
     let qualifiedBL = 0;
-
-    let outside = [];
-
 
     validRows.forEach((item) => {
 
@@ -480,6 +483,8 @@ function calculateVEF() {
         }
     });
 
+
+    outside.sort((a, b) => a - b);
 
     document.getElementById("qualifiedCount").textContent =
         qualifiedCount;
