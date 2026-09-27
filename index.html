@@ -453,7 +453,7 @@ function calculateVEF() {
     let outside = [];
 
 
-    validRows.forEach((item, index) => {
+    validRows.forEach((item) => {
 
         const qualified =
             item.vlr >= lowerRange &&
@@ -476,7 +476,7 @@ function calculateVEF() {
             cell.textContent = "NO";
             cell.className = "qualified qualified-no";
 
-            outside.push(index + 1);
+            outside.push(Array.prototype.indexOf.call(rows, item.row) + 1);
         }
     });
 
@@ -595,7 +595,7 @@ function exportToExcel() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = "VEF-calculation.xml";
+    link.download = "VEF-calculation.xls";
     document.body.appendChild(link);
     link.click();
     link.remove();
