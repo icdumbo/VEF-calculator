@@ -533,77 +533,237 @@ function exportToExcel() {
         })
         .join("");
 
-    const stringCell = (value, style) =>
-        "<Cell" + (style ? " ss:StyleID=\"" + style + "\"" : "") + "><Data ss:Type=\"String\">" + xmlEscape(value) + "</Data></Cell>";
+    const inlineCell = (reference, value, style) =>
+        "<c r=\"" + reference + "\" t=\"inlineStr\"" + (style ? " s=\"" + style + "\"" : "") + "><is><t xml:space=\"preserve\">" + xmlEscape(value) + "</t></is></c>";
 
-    const numberCell = (value) => {
-        if (value === "" || value === null || value === undefined) return stringCell("");
-        const parsed = Number(value);
-        return Number.isFinite(parsed)
-            ? "<Cell><Data ss:Type=\"Number\">" + parsed + "</Data></Cell>"
-            : stringCell(value);
+    const numberCell = (reference, value, style) => {
+        if (value === "" || value === null || value === undefined || !Number.isFinite(Number(value))) {
+            return "<c r=\"" + reference + "\"/>";
+        }
+        return "<c r=\"" + reference + "\"" + (style ? " s=\"" + style + "\"" : "") + "><v>" + Number(value) + "</v></c>";
     };
 
-    const summaryRows = [
-        ["Metric", "Value"],
-        ["Total Ship's Figures (excluding manually excluded voyages)", document.getElementById("totalShip").textContent],
-        ["Total B/L Figures (excluding manually excluded voyages)", document.getElementById("totalBL").textContent],
-        ["Average Ratio", document.getElementById("averageRatio").textContent],
-        ["Lower Range", document.getElementById("lowerRange").textContent],
-        ["Upper Range", document.getElementById("upperRange").textContent],
-        ["Qualified Voyages", document.getElementById("qualifiedCount").textContent],
-        ["Voyages Outside Range", document.getElementById("outsideRange").textContent],
-        ["LOAD V.E.F.", document.getElementById("finalVEF").textContent]
-    ];
-    const numericSummaryRows = new Set([1, 2, 3, 4, 5, 6, 8]);
-    const summaryXml = summaryRows.map((cells, index) =>
-        "<Row>" +
-        stringCell(cells[0], index === 0 ? "Header" : "") +
-        (numericSummaryRows.has(index) ? numberCell(cells[1]) : stringCell(cells[1], index === 0 ? "Header" : "")) +
-        "</Row>"
-    ).join("");
+    const formulaCell = (reference, formula, cachedValue, style, resultType) => {
+        const typeAttribute = resultType === "string" || cachedValue === "" || cachedValue === null || cachedValue === undefined ? " t=\"str\"" : "";
+        const cached = cachedValue === "" || cachedValue === null || cachedValue === undefined
+            ? ""
+            : xmlEscape(cachedValue);
+        return "<c r=\"" + reference + "\"" + typeAttribute + (style ? " s=\"" + style + "\"" : "") + "><f>" + xmlEscape(formula) + "</f><v>" + cached + "</v></c>";
+    };
+
+    const appRows = Array.from(document.querySelectorAll("#tableBody tr"));
+    const firstVoyageRow = 14;
+    const lastVoyageRow = firstVoyageRow + appRows.length - 1;
+    const excelColumns = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"];
+    const summaryValue = (id) => {
+        const value = document.getElementById(id).textContent.trim();
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : "";
+    };
+    const summaryText = (id) => document.getElementById(id).textContent.trim();
+    const asNumber = (value) => {
+        const parsed = Number.parseFloat(value);
+        return Number.isFinite(parsed) ? parsed : "";
+    };
+    const colRange = (column) => column + firstVoyageRow + ":" + column + lastVoyageRow;
+
+    const summaryRows = [];
+    summaryRows.push("<row r=\"1\">" + inlineCell("A1", "VEF CALCULATION SUMMARY (LOADED VOYAGES)", 1) + "</row>");
+    summaryRows.push("<row r=\"2\">" + inlineCell("A2", "Metric", 2) + inlineCell("B2", "Value", 2) + "</row>");
+    summaryRows.push("<row r=\"3\">" + inlineCell("A3", "Total Ship's Figures", 0) + formulaCell("B3", "SUMIFS(" + colRange("D") + "," + colRange("I") + ",\"NO\"," + colRange("D") + ",\"<>\"," + colRange("E") + ",\"<>\"," + colRange("E") + ",\"<>0\")", summaryValue("totalShip"), 3) + "</row>");
+    summaryRows.push("<row r=\"4\">" + inlineCell("A4", "Total B/L Figures", 0) + formulaCell("B4", "SUMIFS(" + colRange("E") + "," + colRange("I") + ",\"NO\"," + colRange("D") + ",\"<>\"," + colRange("E") + ",\"<>\"," + colRange("E") + ",\"<>0\")", summaryValue("totalBL"), 3) + "</row>");
+    summaryRows.push("<row r=\"5\">" + inlineCell("A5", "Average Ratio", 0) + formulaCell("B5", "IF(B4=0,\"\",B3/B4)", summaryValue("averageRatio"), 4, "number") + "</row>");
+    summaryRows.push("<row r=\"6\">" + inlineCell("A6", "Lower Range", 0) + formulaCell("B6", "IF(B5=\"\",\"\",B5-0.003)", summaryValue("lowerRange"), 4, "number") + "</row>");
+    summaryRows.push("<row r=\"7\">" + inlineCell("A7", "Upper Range", 0) + formulaCell("B7", "IF(B5=\"\",\"\",B5+0.003)", summaryValue("upperRange"), 4, "number") + "</row>");
+    summaryRows.push("<row r=\"8\">" + inlineCell("A8", "Qualified Voyages", 0) + formulaCell("B8", "COUNTIF(" + colRange("H") + ",\"YES\")", summaryValue("qualifiedCount"), 0) + "</row>");
+
+    const outsideParts = appRows.map((row, index) => {
+        const excelRow = firstVoyageRow + index;
+        const voyageNumber = index + 1;
+        return "IF(OR(H" + excelRow + "=\"NO\",I" + excelRow + "=\"YES\"),\"" + voyageNumber + "\",\"\")";
+    });
+    const outsideFormula = "IF(COUNTIF(" + colRange("H") + ",\"NO\")+COUNTIF(" + colRange("I") + ",\"YES\")=0,\"None\",TEXTJOIN(\", \" ,TRUE," + outsideParts.join(",") + "))";
+    summaryRows.push("<row r=\"9\">" + inlineCell("A9", "Voyages Outside Range", 0) + formulaCell("B9", outsideFormula, summaryText("outsideRange") === "None" ? "None" : summaryText("outsideRange"), 0, "string") + "</row>");
+    summaryRows.push("<row r=\"10\">" + inlineCell("A10", "LOAD V.E.F.", 0) + formulaCell("B10", "IFERROR(SUMIF(" + colRange("H") + ",\"YES\"," + colRange("D") + ")/SUMIF(" + colRange("H") + ",\"YES\"," + colRange("E") + "),\"\")", summaryValue("finalVEF"), 5, "number") + "</row>");
 
     const voyageHeaders = [
         "Port / Terminal", "B/L Date", "Cargo", "Ship's Figures", "B/L Figures",
         "Difference", "V.L.R.", "Qualified", "Manual Exclude", "Reason (optional)"
     ];
-    const voyageRows = Array.from(document.querySelectorAll("#tableBody tr"));
-    const voyageXml = "<Row>" + voyageHeaders.map((header) => stringCell(header, "Header")).join("") + "</Row>" +
-        voyageRows.map((row) => {
-            const ship = row.querySelector(".ship").value;
-            const bl = row.querySelector(".bl").value;
-            const manuallyExcluded = row.querySelector(".manual-exclude").checked;
-            const cells = [
-                stringCell(row.querySelector(".port").value),
-                stringCell(row.querySelector(".date").value),
-                stringCell(row.querySelector(".cargo").value),
-                numberCell(ship),
-                numberCell(bl),
-                numberCell(row.querySelector(".difference").textContent === "-" ? "" : row.querySelector(".difference").textContent),
-                numberCell(row.querySelector(".vlr").textContent === "-" ? "" : row.querySelector(".vlr").textContent),
-                stringCell(row.querySelector(".qualified").textContent),
-                stringCell(manuallyExcluded ? "YES" : "NO"),
-                stringCell(row.querySelector(".reason").value)
-            ];
-            return "<Row>" + cells.join("") + "</Row>";
-        }).join("");
+    const voyageRowsXml = appRows.map((row, index) => {
+        const excelRow = firstVoyageRow + index;
+        const shipInput = row.querySelector(".ship").value;
+        const blInput = row.querySelector(".bl").value;
+        const ship = asNumber(shipInput);
+        const bl = asNumber(blInput);
+        const validFigures = ship !== "" && bl !== "" && bl !== 0;
+        const manual = row.querySelector(".manual-exclude").checked;
+        const manualText = manual ? "YES" : "NO";
+        const appQualified = row.querySelector(".qualified").textContent.trim();
+        const appVlr = asNumber(row.querySelector(".vlr").textContent.trim());
+        const differenceValue = validFigures ? ship - bl : "";
+        const vlrValue = validFigures ? ship / bl : "";
+        const qualifiedValue = appQualified === "YES" || appQualified === "NO" ? appQualified : "";
+        const cellParts = [
+            inlineCell("A" + excelRow, row.querySelector(".port").value, 0),
+            inlineCell("B" + excelRow, row.querySelector(".date").value, 0),
+            inlineCell("C" + excelRow, row.querySelector(".cargo").value, 0),
+            numberCell("D" + excelRow, ship, 3),
+            numberCell("E" + excelRow, bl, 3),
+            formulaCell("F" + excelRow, "IF(OR(D" + excelRow + "=\"\",E" + excelRow + "=\"\",E" + excelRow + "=0),\"\",D" + excelRow + "-E" + excelRow + ")", differenceValue, 3, "number"),
+            formulaCell("G" + excelRow, "IF(OR(D" + excelRow + "=\"\",E" + excelRow + "=\"\",E" + excelRow + "=0),\"\",D" + excelRow + "/E" + excelRow + ")", vlrValue, 4, "number"),
+            formulaCell("H" + excelRow, "IF(OR(D" + excelRow + "=\"\",E" + excelRow + "=\"\",E" + excelRow + "=0),\"\",IF(I" + excelRow + "=\"YES\",\"NO\",IF($B$5=\"\",\"\",IF(AND(G" + excelRow + ">=$B$6,G" + excelRow + "<=$B$7),\"YES\",\"NO\"))))", qualifiedValue, 0, "string"),
+            inlineCell("I" + excelRow, manualText, 0),
+            inlineCell("J" + excelRow, row.querySelector(".reason").value, 0)
+        ];
+        return "<row r=\"" + excelRow + "\">" + cellParts.join("") + "</row>";
+    }).join("");
 
-    const workbook = '<?xml version="1.0" encoding="UTF-8"?>' +
-        '<?mso-application progid="Excel.Sheet"?>' +
-        '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">' +
-        '<Styles><Style ss:ID="Header"><Font ss:Bold="1"/><Interior ss:Color="#D9EAD3" ss:Pattern="Solid"/></Style></Styles>' +
-        '<Worksheet ss:Name="VEF Calculator"><Table>' +
-        '<Row>' + stringCell("Summary", "Header") + '</Row>' + summaryXml +
-        '<Row/>' +
-        '<Row>' + stringCell("Voyages", "Header") + '</Row>' + voyageXml +
-        '</Table></Worksheet>' +
-        '</Workbook>';
+    const voyageHeaderRow = firstVoyageRow - 1;
+    const voyageHeadingRow = voyageHeaderRow - 1;
+    const rowsXml = summaryRows.join("") +
+        "<row r=\"11\"/>" +
+        "<row r=\"" + voyageHeadingRow + "\">" + inlineCell("A" + voyageHeadingRow, "LOADED VOYAGES", 1) + "</row>" +
+        "<row r=\"" + voyageHeaderRow + "\">" + voyageHeaders.map((header, index) => inlineCell(excelColumns[index] + voyageHeaderRow, header, 2)).join("") + "</row>" +
+        voyageRowsXml;
 
-    const blob = new Blob([String.fromCharCode(0xFEFF), workbook], { type: "application/vnd.ms-excel;charset=utf-8" });
+    const worksheetXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+        '<sheetViews><sheetView workbookViewId="0" showGridLines="1"/></sheetViews>' +
+        '<cols><col min="1" max="1" width="25" customWidth="1"/><col min="2" max="2" width="14" customWidth="1"/><col min="3" max="3" width="28" customWidth="1"/><col min="4" max="5" width="16" customWidth="1"/><col min="6" max="6" width="14" customWidth="1"/><col min="7" max="8" width="13" customWidth="1"/><col min="9" max="9" width="15" customWidth="1"/><col min="10" max="10" width="25" customWidth="1"/></cols>' +
+        '<sheetData>' + rowsXml + '</sheetData>' +
+        '<mergeCells count="2"><mergeCell ref="A1:J1"/><mergeCell ref="A' + voyageHeadingRow + ':J' + voyageHeadingRow + '"/></mergeCells>' +
+        '</worksheet>';
+
+    const workbookXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+        '<sheets><sheet name="VEF Calculator" sheetId="1" r:id="rId1"/></sheets>' +
+        '<calcPr calcId="191029" calcMode="auto" fullCalcOnLoad="1" forceFullCalc="1"/></workbook>';
+
+    const stylesXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+        '<numFmts count="3"><numFmt numFmtId="164" formatCode="#,##0.000"/><numFmt numFmtId="165" formatCode="0.000000"/><numFmt numFmtId="166" formatCode="0.0000"/></numFmts>' +
+        '<fonts count="3"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="14"/><name val="Calibri"/></font></fonts>' +
+        '<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFD9EAD3"/><bgColor indexed="64"/></patternFill></fill></fills>' +
+        '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>' +
+        '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
+        '<cellXfs count="6"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/><xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="166" fontId="1" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1"/></cellXfs>' +
+        '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>';
+
+    const contentTypesXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+        '<Default Extension="xml" ContentType="application/xml"/>' +
+        '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+        '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
+        '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' +
+        '</Types>';
+
+    const packageRelsXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>' +
+        '</Relationships>';
+
+    const workbookRelsXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>' +
+        '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>' +
+        '</Relationships>';
+
+    const utf8 = new TextEncoder();
+    const crc32 = (bytes) => {
+        let crc = 0xFFFFFFFF;
+        for (let index = 0; index < bytes.length; index++) {
+            crc ^= bytes[index];
+            for (let bit = 0; bit < 8; bit++) {
+                crc = (crc >>> 1) ^ ((crc & 1) ? 0xEDB88320 : 0);
+            }
+        }
+        return (crc ^ 0xFFFFFFFF) >>> 0;
+    };
+    const write16 = (view, offset, value) => view.setUint16(offset, value, true);
+    const write32 = (view, offset, value) => view.setUint32(offset, value >>> 0, true);
+    const joinBytes = (parts) => {
+        const length = parts.reduce((sum, part) => sum + part.length, 0);
+        const result = new Uint8Array(length);
+        let offset = 0;
+        parts.forEach((part) => { result.set(part, offset); offset += part.length; });
+        return result;
+    };
+
+    const entries = [
+        ["[Content_Types].xml", contentTypesXml],
+        ["_rels/.rels", packageRelsXml],
+        ["xl/workbook.xml", workbookXml],
+        ["xl/_rels/workbook.xml.rels", workbookRelsXml],
+        ["xl/worksheets/sheet1.xml", worksheetXml],
+        ["xl/styles.xml", stylesXml]
+    ];
+    const localParts = [];
+    const centralParts = [];
+    let localOffset = 0;
+    const dosDate = 0x21;
+
+    entries.forEach(([name, text]) => {
+        const nameBytes = utf8.encode(name);
+        const dataBytes = utf8.encode(text);
+        const crc = crc32(dataBytes);
+        const localHeader = new Uint8Array(30);
+        const localView = new DataView(localHeader.buffer);
+        write32(localView, 0, 0x04034B50);
+        write16(localView, 4, 20);
+        write16(localView, 6, 0x0800);
+        write16(localView, 8, 0);
+        write16(localView, 10, 0);
+        write16(localView, 12, dosDate);
+        write32(localView, 14, crc);
+        write32(localView, 18, dataBytes.length);
+        write32(localView, 22, dataBytes.length);
+        write16(localView, 26, nameBytes.length);
+        write16(localView, 28, 0);
+        localParts.push(localHeader, nameBytes, dataBytes);
+
+        const centralHeader = new Uint8Array(46);
+        const centralView = new DataView(centralHeader.buffer);
+        write32(centralView, 0, 0x02014B50);
+        write16(centralView, 4, 20);
+        write16(centralView, 6, 20);
+        write16(centralView, 8, 0x0800);
+        write16(centralView, 10, 0);
+        write16(centralView, 12, 0);
+        write16(centralView, 14, dosDate);
+        write32(centralView, 16, crc);
+        write32(centralView, 20, dataBytes.length);
+        write32(centralView, 24, dataBytes.length);
+        write16(centralView, 28, nameBytes.length);
+        write16(centralView, 30, 0);
+        write16(centralView, 32, 0);
+        write16(centralView, 34, 0);
+        write16(centralView, 36, 0);
+        write32(centralView, 38, 0);
+        write32(centralView, 42, localOffset);
+        centralParts.push(centralHeader, nameBytes);
+        localOffset += localHeader.length + nameBytes.length + dataBytes.length;
+    });
+
+    const centralDirectory = joinBytes(centralParts);
+    const endRecord = new Uint8Array(22);
+    const endView = new DataView(endRecord.buffer);
+    write32(endView, 0, 0x06054B50);
+    write16(endView, 4, 0);
+    write16(endView, 6, 0);
+    write16(endView, 8, entries.length);
+    write16(endView, 10, entries.length);
+    write32(endView, 12, centralDirectory.length);
+    write32(endView, 16, localOffset);
+    write16(endView, 20, 0);
+
+    const zipBytes = joinBytes([...localParts, centralDirectory, endRecord]);
+    const blob = new Blob([zipBytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = "VEF-calculation.xls";
+    link.download = "VEF-calculation.xlsx";
     document.body.appendChild(link);
     link.click();
     link.remove();
