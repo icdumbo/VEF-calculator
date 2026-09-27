@@ -192,6 +192,15 @@
         padding: 6px 10px;
     }
 
+    .export {
+        background: #16a34a;
+        color: #fff;
+    }
+
+    .export:hover {
+        background: #15803d;
+    }
+
     .invalid-input { border-color: #dc2626 !important; background: #fef2f2; }
     .row-incomplete { background: #fff1f2; }
     .row-status { min-width: 155px; font-size: 12px; color: #991b1b; }
@@ -269,9 +278,9 @@
         <h2>Generate VEF Report</h2>
         <p>Choose a report format.</p>
         <div class="buttons">
-            <button class="export" onclick="exportToExcel(); closeReportDialog()">Export Excel</button>
-            <button class="export" onclick="exportToPDF(); closeReportDialog()">Export PDF</button>
-            <button onclick="closeReportDialog()">Cancel</button>
+            <button type="button" class="export" onclick="runReportExport('excel')">Export Excel</button>
+            <button type="button" class="export" onclick="runReportExport('pdf')">Export PDF</button>
+            <button type="button" onclick="closeReportDialog()">Cancel</button>
         </div>
     </dialog>
 
@@ -1064,6 +1073,28 @@ function closeReportDialog() {
     const dialog = document.getElementById("reportDialog");
     if (dialog.open) dialog.close();
     restorePendingHistoryExport();
+}
+
+function runReportExport(format) {
+    const dialog = document.getElementById("reportDialog");
+    if (dialog.open) dialog.close();
+
+    let failure = null;
+    try {
+        if (format === "excel") exportToExcel();
+        else if (format === "pdf") exportToPDF();
+        else throw new Error("Unknown report format.");
+    } catch (error) {
+        failure = error;
+    } finally {
+        restorePendingHistoryExport();
+    }
+
+    const validation = document.getElementById("validationSummary");
+    validation.className = failure ? "validation-summary has-errors" : "validation-summary has-success";
+    validation.textContent = failure
+        ? "The report could not be generated: " + failure.message
+        : (format === "excel" ? "Excel report generated. Check your browser downloads." : "PDF report generated. Check your browser downloads.");
 }
 
 function restorePendingHistoryExport() {
