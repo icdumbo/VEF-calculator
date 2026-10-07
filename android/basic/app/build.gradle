@@ -7,8 +7,8 @@ android {
         applicationId 'app.vessel.vef.basic'
         minSdk 26
         targetSdk 36
-        versionCode 3
-        versionName '1.0'
+        versionCode 4
+        versionName '1.0-admob-test1'
     }
     buildTypes {
         debug {
@@ -35,3 +35,5 @@ android {
 }
 
 apply from: rootProject.file('release-signing.gradle')
+
+dependencies { implementation 'com.google.android.gms:play-services-ads:25.5.0' }

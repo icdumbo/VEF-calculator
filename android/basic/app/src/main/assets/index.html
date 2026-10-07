@@ -11,11 +11,13 @@
   <link rel="stylesheet" href="styles.css">
   <script defer src="calculation.js"></script>
   <script defer src="form-inputs.js"></script>
+  <script defer src="ads-layout.js"></script>
   <script defer src="app.js"></script>
 </head>
 <body>
   <header class="masthead"><div class="brand"><img class="brand-mark" src="logo.png" alt=""><div><h1>Vessel VEF Calculator <span class="edition">BASIC</span></h1><p>Loaded voyages</p></div></div><button id="newCalculation" class="quiet">New calculation</button></header>
   <main>
+    <div id="adSlot" aria-hidden="true" style="height:0;overflow:hidden"></div>
     <section class="result-panel" aria-labelledby="resultHeading">
       <div class="result-top"><div><h2 id="resultHeading">LOAD V.E.F.</h2><output id="finalVEF">-</output></div><div class="result-count"><strong id="qualifiedCount">0</strong><span>qualified voyages</span></div></div>
       <dl class="ranges"><div><dt>Average ratio</dt><dd id="averageRatio">-</dd></div><div><dt>Lower range</dt><dd id="lowerRange">-</dd></div><div><dt>Upper range</dt><dd id="upperRange">-</dd></div></dl>

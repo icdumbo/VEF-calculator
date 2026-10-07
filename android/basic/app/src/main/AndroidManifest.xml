@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <application
         android:label="Vessel VEF Calculator BASIC"
         android:icon="@mipmap/ic_launcher"
@@ -10,6 +12,9 @@
         android:enableOnBackInvokedCallback="false"
         android:theme="@style/AppTheme"
         android:supportsRtl="true">
+        <!-- Official Google sample app ID only; not a publisher account. -->
+        <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID"
+            android:value="ca-app-pub-3940256099942544~3347511713" />
         <activity android:name=".MainActivity" android:exported="true"
             android:label="VEF BASIC"
             android:configChanges="orientation|screenSize|smallestScreenSize|keyboardHidden|keyboard|uiMode"

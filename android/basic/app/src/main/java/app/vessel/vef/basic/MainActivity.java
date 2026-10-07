@@ -15,6 +15,7 @@ import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputConnectionWrapper;
 import android.view.WindowInsets;
 import android.webkit.CookieManager;
+import android.webkit.ConsoleMessage;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
@@ -37,11 +38,13 @@ public final class MainActivity extends Activity {
         ASSETS.put("styles.css", "text/css");
         ASSETS.put("app.js", "application/javascript");
         ASSETS.put("form-inputs.js", "application/javascript");
+        ASSETS.put("ads-layout.js", "application/javascript");
         ASSETS.put("calculation.js", "application/javascript");
         ASSETS.put("logo.png", "image/png");
     }
     private WebView webView;
     private boolean exitDialogOpen;
+    private TestBanner testBanner;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override public void onCreate(Bundle state) {
@@ -99,7 +102,17 @@ public final class MainActivity extends Activity {
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, false);
         webView.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
         WebView.setWebContentsDebuggingEnabled(false);
-        webView.setWebChromeClient(new WebChromeClient());
+        testBanner = new TestBanner(this, webView, root);
+        webView.setWebChromeClient(new WebChromeClient() {
+            @Override public boolean onConsoleMessage(ConsoleMessage message) {
+                if (("https://" + ORIGIN + "/assets/ads-layout.js").equals(message.sourceId())
+                    && message.message().startsWith("VEF_AD_LAYOUT:")) {
+                    testBanner.layout(message.message().substring(14));
+                    return true;
+                }
+                return super.onConsoleMessage(message);
+            }
+        });
         webView.setWebViewClient(new WebViewClient() {
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 return !START.equals(request.getUrl().toString());
@@ -140,9 +153,10 @@ public final class MainActivity extends Activity {
             });
     }
 
-    @Override protected void onPause() { webView.onPause(); super.onPause(); }
-    @Override protected void onResume() { super.onResume(); if (webView != null) webView.onResume(); }
+    @Override protected void onPause() { if (testBanner != null) testBanner.pause(); webView.onPause(); super.onPause(); }
+    @Override protected void onResume() { super.onResume(); if (webView != null) webView.onResume(); if (testBanner != null) testBanner.resume(); }
     @Override protected void onDestroy() {
+        if (testBanner != null) testBanner.destroy();
         if (webView != null) { ((FrameLayout) webView.getParent()).removeView(webView); webView.destroy(); }
         super.onDestroy();
     }

@@ -1,14 +1,14 @@
 # Vessel VEF Calculator BASIC — Android
 
-Offline Android wrapper for the tested BASIC calculator. Android 8.0 or later, with an up-to-date Android System WebView. Application ID: `app.vessel.vef.basic`. Compile/target SDK: API 36. Release: versionCode `3`, versionName `1.0`; debug versionName `1.0-test3`. The delivered test2 APK remains unchanged.
+Android wrapper for the tested BASIC calculator. Android 8.0 or later, with an up-to-date Android System WebView. Application ID: `app.vessel.vef.basic`. Compile/target SDK: API 36. Current test: versionCode `4`, versionName `1.0-admob-test1`. The validated no-ads version is preserved at Git tag `basic-android16-validated-no-ads` (1.0, code 3).
 
-The calculation file is copied unchanged from the inspected BASIC archive. Maximum 20 voyage cards. VEF is calculated with any positive number of qualified voyages, including fewer than five, as requested. Qualification uses the unrounded ratio and average ± 0.003. No persistence, accounts, network permission, analytics, exports, or real vessel fixtures are included.
+The calculation file is copied unchanged from the inspected BASIC archive. Maximum 20 voyage cards. VEF is calculated with any positive number of qualified voyages, including fewer than five, as requested. Qualification uses the unrounded ratio and average ± 0.003. No calculator persistence, accounts, history, exports or real vessel fixtures are included. The native AdMob test banner uses network access; the calculator WebView keeps its existing network restrictions and works offline.
 
 The launcher displays `VEF BASIC`. The complete name appears in the calculator. The icon is derived from the approved logo. Android Back closes an open form confirmation first; otherwise it asks before discarding entered data. Rotation retains the running page. Process termination and closing the app discard inputs.
 
 ## Build
 
-Requires JDK 17, Gradle 8.11.1, stable Android Gradle Plugin 8.10.1, SDK platform 36 and build tools 35.0.0, with the SDK licence accepted. Set `JAVA_HOME` and `ANDROID_HOME` to your installations. Set `VEF_TEST_KEYSTORE` to the existing test key; preserve it for test APK updates, then run:
+Requires JDK 17, Gradle 8.13, stable Android Gradle Plugin 8.13.2, SDK platform 36 and build tools 35.0.0, with the SDK licence accepted. These build versions support the Kotlin metadata used by Mobile Ads SDK 25.5.0. Set `JAVA_HOME` and `ANDROID_HOME` to your installations. Set `VEF_TEST_KEYSTORE` to the existing test key; preserve it for test APK updates, then run:
 
 ```powershell
 gradle --no-daemon :app:assembleDebug :app:lintDebug
@@ -27,9 +27,21 @@ Alternatively open this project in Android Studio and select Build APK. The debu
 
 The original PDFs and their data are intentionally not part of this project or APK. Numeric regression tests are distinct from device testing; installation and interaction on physical hardware remain necessary.
 
+## AdMob test integration
+
+One native adaptive banner uses Google Mobile Ads SDK `25.5.0`. Official demo application ID: `ca-app-pub-3940256099942544~3347511713`; demo adaptive banner ID: `ca-app-pub-3940256099942544/9214589741`. No real publisher ID, mediation, interstitial, rewarded or fullscreen ad calls are configured.
+
+`ads-layout.js` reports only the reserved slot's viewport coordinates through a source-checked console message; no JavaScript interface exposes native methods or calculator data. `TestBanner.java` clips the native view to that reserved area, follows scrolling, forwards vertical drags to the existing WebView, hides behind confirmation dialogs, and recreates the adaptive request for changed widths. The slot is initially zero height, expands only after a successful load, and collapses on load failure. SDK pause/resume/destroy follows the activity lifecycle. Original app.js, form-inputs.js, calculation.js, styles.css and logo are unchanged.
+
+Phone test: online, confirm a single test creative between the header and LOAD V.E.F.; scroll from the banner, rotate, use the keyboard and reset confirmation, then relaunch offline and confirm no large empty gap and normal calculation. Advertising delivery and touch rendering still require the user's physical Android 16 check.
+
+This stage builds an APK only, signed with the existing test key. No new upload key, production AAB or Google Play upload is performed. Before any real monetization, publisher IDs and the applicable consent/privacy integration must be handled separately with owner authorization.
+
+Sources: [SDK setup](https://developers.google.com/admob/android/quick-start), [adaptive banner and demo IDs](https://developers.google.com/admob/android/banner), [AGP compatibility](https://developer.android.com/build/releases/agp-8-13-0-release-notes).
+
 ## Google Play release preparation
 
-Read [PLAY-RELEASE.md](PLAY-RELEASE.md) before creating a production key or enrolling in Play App Signing. No production key has been created and no publication has occurred.
+Read [PLAY-RELEASE.md](PLAY-RELEASE.md) for the separate production signing process. Existing upload signing materials remain local, outside this repository, and are not used or changed by this test integration. No publication has occurred.
 
 Release signing reads four environment variables only: `VEF_UPLOAD_KEYSTORE` (absolute path outside the project and Git worktree), `VEF_UPLOAD_STORE_PASSWORD`, `VEF_UPLOAD_KEY_ALIAS`, and `VEF_UPLOAD_KEY_PASSWORD`. Supply them privately in the current local process and clear them afterward. Never place real values in project files, GitHub, chat, committed scripts or command-line arguments. Do not use `--debug`, `--info` or `--scan` with signing credentials. Configuration caching is disabled to avoid caching those values.
 
