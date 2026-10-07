@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#102d40">
+  <meta name="description" content="Local vessel experience factor calculator for up to 20 loaded voyages.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Vessel VEF Calculator BASIC</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23102d40'/%3E%3Cpath d='m7 9 9 16 9-16' fill='none' stroke='%235fe0bb' stroke-width='4'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+  <script defer src="calculation.js"></script>
+  <script defer src="form-inputs.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <header class="masthead"><div class="brand"><img class="brand-mark" src="logo.png" alt=""><div><h1>Vessel VEF Calculator <span class="edition">BASIC</span></h1><p>Loaded voyages</p></div></div><button id="newCalculation" class="quiet">New calculation</button></header>
+  <main>
+    <section class="result-panel" aria-labelledby="resultHeading">
+      <div class="result-top"><div><h2 id="resultHeading">LOAD V.E.F.</h2><output id="finalVEF">-</output></div><div class="result-count"><strong id="qualifiedCount">0</strong><span>qualified voyages</span></div></div>
+      <dl class="ranges"><div><dt>Average ratio</dt><dd id="averageRatio">-</dd></div><div><dt>Lower range</dt><dd id="lowerRange">-</dd></div><div><dt>Upper range</dt><dd id="upperRange">-</dd></div></dl>
+      <p class="rule">Qualification range: average ratio ± 0.003</p>
+      <div hidden><span id="totalShip"></span><span id="totalBL"></span><span id="outsideRange"></span></div>
+    </section>
+    <div class="workspace">
+      <section class="vessel-panel" aria-labelledby="vesselHeading">
+        <div class="section-title"><span class="section-number">01</span><h2 id="vesselHeading">Vessel details</h2></div>
+        <div class="vessel-fields"><label class="vessel-name">Vessel name<input id="vesselName" type="text" enterkeyhint="next" autocomplete="off" placeholder="Enter vessel name"></label><label>IMO number <span class="optional">(optional)</span><input id="imoNumber" type="text" inputmode="numeric" enterkeyhint="next" pattern="[0-9]*" autocomplete="off" placeholder="IMO number" aria-describedby="imoError"></label><label>Calculation date<input id="calculationDate" class="manual-date" type="text" inputmode="numeric" enterkeyhint="next" autocomplete="off" placeholder="DD.MM.YYYY" aria-label="Calculation date, DD.MM.YYYY"></label></div>
+        <p id="imoError" class="field-error" hidden>IMO number must contain digits only.</p>
+      </section>
+      <section aria-labelledby="voyagesHeading">
+        <div class="section-title voyage-section-title"><span class="section-number">02</span><h2 id="voyagesHeading">Voyages</h2><span id="voyageCount" class="count">1 / 20</span></div>
+        <p class="section-help">Use the same unit for both quantities. Up to 3 decimal places.</p>
+        <div id="voyages"></div>
+        <p id="limitMessage" class="limit-message" hidden>20-voyage limit reached. Remove a voyage to add another.</p>
+      </section>
+      <div id="validationSummary" class="validation-summary" role="status"></div>
+      <p id="actionStatus" class="action-status" role="status" aria-live="polite"></p>
+      <footer class="footnote">Calculated on your device. Entries are not saved. Closing the calculator or Android stopping the app clears your entries.</footer>
+      <button id="clearCalculation" class="clear-button">Clear current calculation</button>
+    </div>
+  </main>
+  <div class="action-bar"><div><button id="addVoyage" class="secondary">+ Add voyage</button><button id="calculate" class="primary">Calculate VEF</button></div></div>
+  <dialog id="confirmDialog" aria-labelledby="confirmHeading"><h2 id="confirmHeading">Clear this calculation?</h2><p id="confirmText">All entered data will be removed. This version does not save calculations.</p><div class="dialog-actions"><button id="cancelReset" class="secondary">Keep editing</button><button id="confirmReset" class="primary">Clear calculation</button></div></dialog>
+  <template id="voyageTemplate">
+    <details class="voyage" open>
+      <summary><span class="voyage-label">Voyage <span class="voyage-number"></span></span><span class="port-preview">Not entered</span><span class="status-badge">Incomplete</span><span class="chevron" aria-hidden="true">⌄</span></summary>
+      <div class="voyage-body"><div class="voyage-fields">
+        <label class="wide">Port / terminal<input class="port" type="text" enterkeyhint="next" autocomplete="off" placeholder="Port or terminal"></label>
+        <label>B/L date<input class="date manual-date" type="text" inputmode="numeric" enterkeyhint="next" autocomplete="off" placeholder="DD.MM.YYYY" aria-label="B/L date, DD.MM.YYYY"></label><label>Cargo<input class="cargo" type="text" enterkeyhint="next" autocomplete="off" placeholder="Cargo description"></label>
+        <label>Ship's figures<input class="ship" type="number" inputmode="decimal" enterkeyhint="next" min="0.001" step="0.001" placeholder="0.000" required></label><label>B/L figures<input class="bl" type="number" inputmode="decimal" enterkeyhint="next" min="0.001" step="0.001" placeholder="0.000" required></label>
+      </div><dl class="voyage-results"><div><dt>Difference</dt><dd class="difference">-</dd></div><div><dt>V.L.R.</dt><dd class="vlr">-</dd></div><div><dt>Qualified</dt><dd class="qualified">-</dd></div></dl><p class="row-status"></p><button type="button" class="remove-voyage">Remove voyage</button></div>
+    </details>
+  </template>
+</body>
+</html>

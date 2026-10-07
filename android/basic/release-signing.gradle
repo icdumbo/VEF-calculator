@@ -1,0 +1,75 @@
+// Upload credentials are supplied locally, never stored in project files.
+def uploadNames = ['VEF_UPLOAD_KEYSTORE', 'VEF_UPLOAD_STORE_PASSWORD',
+                   'VEF_UPLOAD_KEY_ALIAS', 'VEF_UPLOAD_KEY_PASSWORD']
+def uploadValues = uploadNames.collectEntries { [(it): System.getenv(it)] }
+def unsignedVerification = providers.gradleProperty('vefUnsignedVerification')
+    .map { it == 'true' }.getOrElse(false)
+def completeUploadConfig = uploadNames.every { uploadValues[it] }
+
+if (completeUploadConfig && !unsignedVerification) {
+    android.signingConfigs.create('playUpload') {
+        storeFile file(uploadValues.VEF_UPLOAD_KEYSTORE)
+        storePassword uploadValues.VEF_UPLOAD_STORE_PASSWORD
+        keyAlias uploadValues.VEF_UPLOAD_KEY_ALIAS
+        keyPassword uploadValues.VEF_UPLOAD_KEY_PASSWORD
+    }
+    android.buildTypes.release.signingConfig = android.signingConfigs.playUpload
+}
+
+def verifyPlaySigning = tasks.register('verifyPlaySigning') {
+    doLast {
+        if (unsignedVerification) {
+            if (uploadNames.any { uploadValues[it] }) {
+                throw new GradleException('Unsigned verification must run without upload credentials.')
+            }
+            logger.lifecycle('UNSIGNED VERIFICATION ONLY: this release artifact cannot be uploaded to Google Play.')
+            return
+        }
+        if (!completeUploadConfig) {
+            throw new GradleException('Release signing is not configured. Supply all four VEF_UPLOAD_* environment variables outside the repository. No test-key fallback is allowed.')
+        }
+        if (!new File(uploadValues.VEF_UPLOAD_KEYSTORE).isAbsolute()) {
+            throw new GradleException('VEF_UPLOAD_KEYSTORE must be an absolute local path outside the repository.')
+        }
+        def uploadFile = file(uploadValues.VEF_UPLOAD_KEYSTORE).canonicalFile
+        def sourceRoot = rootProject.projectDir.canonicalFile.toPath()
+        if (uploadFile.toPath().startsWith(sourceRoot)) {
+            throw new GradleException('Keep the upload keystore outside the source project.')
+        }
+        for (def parent = rootProject.projectDir.canonicalFile; parent != null; parent = parent.parentFile) {
+            if (new File(parent, '.git').exists() && uploadFile.toPath().startsWith(parent.toPath())) {
+                throw new GradleException('Keep the upload keystore outside the Git worktree.')
+            }
+        }
+        try {
+            def store = java.security.KeyStore.getInstance(uploadFile,
+                uploadValues.VEF_UPLOAD_STORE_PASSWORD.toCharArray())
+            def alias = uploadValues.VEF_UPLOAD_KEY_ALIAS
+            def certificate = store.getCertificate(alias)
+            if (!store.isKeyEntry(alias) || certificate == null) {
+                throw new IllegalArgumentException()
+            }
+            def privateKey = store.getKey(alias, uploadValues.VEF_UPLOAD_KEY_PASSWORD.toCharArray())
+            if (!(privateKey instanceof java.security.PrivateKey)) throw new IllegalArgumentException()
+            def fingerprint = java.security.MessageDigest.getInstance('SHA-256')
+                .digest(certificate.encoded).encodeHex().toString()
+            if (fingerprint == '163d65c5a97fe13c0bf082fcfc58361b5c88f9464deb35d8f6f781fa28dd3662'
+                || certificate.subjectX500Principal.name.contains('CN=Android Debug')
+                || alias.equalsIgnoreCase('androiddebugkey')) {
+                throw new GradleException('Debug/test certificates are forbidden for production releases.')
+            }
+            certificate.checkValidity()
+        } catch (GradleException failure) {
+            throw failure
+        } catch (Exception ignored) {
+            throw new GradleException('Upload keystore validation failed. Check the local file, alias, passwords and certificate validity; credentials are not logged.')
+        }
+    }
+}
+
+tasks.configureEach {
+    if (name in ['packageRelease', 'packageReleaseBundle', 'packageReleaseUniversalApk',
+                 'signReleaseBundle', 'bundleRelease', 'assembleRelease', 'validateSigningRelease']) {
+        dependsOn verifyPlaySigning
+    }
+}
