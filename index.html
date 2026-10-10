@@ -662,6 +662,10 @@ function calculateVEF(showValidation = false) {
 
         qualifiedCell.textContent = "-";
         qualifiedCell.className = "qualified";
+        if (manuallyExcluded) {
+            qualifiedCell.textContent = "NO";
+            qualifiedCell.className = "qualified qualified-no";
+        }
 
         if (Number.isFinite(ship) && Number.isFinite(bl) && ship > 0 && bl > 0) {
 
@@ -731,7 +735,7 @@ function calculateVEF(showValidation = false) {
 
         persistDraft();
 
-        return;
+        return { totalShip, totalBL, averageRatio: "", lowerRange: "", upperRange: "", qualifiedCount: 0, finalVEF: "" };
     }
 
 
@@ -758,9 +762,10 @@ function calculateVEF(showValidation = false) {
 
     validRows.forEach((item) => {
 
-        const qualified =
-            item.vlr >= lowerRange &&
-            item.vlr <= upperRange;
+        // Include exact limits despite IEEE-754 division/addition noise.
+        // This is a machine-precision guard, not rounding VLR to its display value.
+        const tolerance = Number.EPSILON * 8 * Math.max(1, Math.abs(item.vlr), Math.abs(averageRatio));
+        const qualified = Math.abs(item.vlr - averageRatio) <= 0.003 + tolerance;
 
         const cell = item.row.querySelector(".qualified");
 
@@ -820,12 +825,15 @@ function calculateVEF(showValidation = false) {
 
     persistDraft();
 
+    return { totalShip, totalBL, averageRatio, lowerRange, upperRange, qualifiedCount,
+        finalVEF: qualifiedBL > 0 ? qualifiedShip / qualifiedBL : "" };
+
 }
 
 
 function exportToExcel() {
 
-    calculateVEF();
+    const calculation = calculateVEF();
 
     const xmlEscape = (value) => String(value ?? "")
         .replace(/&/g, "&amp;")
@@ -860,12 +868,10 @@ function exportToExcel() {
 
     const appRows = Array.from(document.querySelectorAll("#tableBody tr"));
     const firstVoyageRow = 14;
-    const lastVoyageRow = firstVoyageRow + appRows.length - 1;
+    const lastVoyageRow = firstVoyageRow + Math.max(1, appRows.length) - 1;
     const excelColumns = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"];
     const summaryValue = (id) => {
-        const value = String(document.getElementById(id).textContent).trim();
-        const parsed = Number(value);
-        return Number.isFinite(parsed) ? parsed : "";
+        return calculation[id];
     };
     const summaryText = (id) => String(document.getElementById(id).textContent).trim();
     const asNumber = (value) => {
@@ -877,10 +883,9 @@ function exportToExcel() {
     const summaryRows = [];
     summaryRows.push("<row r=\"1\">" + inlineCell("A1", "VEF CALCULATION SUMMARY (LOADED VOYAGES)", 1) + "</row>");
     summaryRows.push("<row r=\"2\">" + inlineCell("A2", "Metric", 2) + inlineCell("B2", "Value", 2) + inlineCell("C2", "Vessel Name", 0) + inlineCell("D2", document.getElementById("vesselName").value, 6) + "</row>");
-    summaryRows.push("<row r=\"3\">" + inlineCell("C3", "IMO Number", 0) + inlineCell("D3", document.getElementById("imoNumber").value, 6) + "</row>");
-    summaryRows.push("<row r=\"4\">" + inlineCell("C4", "Calculation Date", 0) + inlineCell("D4", document.getElementById("calculationDate").value, 6) + "</row>");
-    summaryRows.push("<row r=\"3\">" + inlineCell("A3", "Total Ship's Figures", 0) + formulaCell("B3", "SUMIFS(" + colRange("D") + "," + colRange("I") + ",\"NO\"," + colRange("D") + ",\">0\"," + colRange("E") + ",\">0\")", summaryValue("totalShip"), 3) + "</row>");
-    summaryRows.push("<row r=\"4\">" + inlineCell("A4", "Total B/L Figures", 0) + formulaCell("B4", "SUMIFS(" + colRange("E") + "," + colRange("I") + ",\"NO\"," + colRange("D") + ",\">0\"," + colRange("E") + ",\">0\")", summaryValue("totalBL"), 3) + "</row>");
+    // K is a hidden, protected eligibility formula, independent of qualification.
+    summaryRows.push("<row r=\"3\">" + inlineCell("A3", "Total Ship's Figures", 0) + formulaCell("B3", "SUMIFS(" + colRange("D") + "," + colRange("I") + ",\"NO\"," + colRange("K") + ",\"YES\")", summaryValue("totalShip"), 3) + inlineCell("C3", "IMO Number", 0) + inlineCell("D3", document.getElementById("imoNumber").value, 6) + "</row>");
+    summaryRows.push("<row r=\"4\">" + inlineCell("A4", "Total B/L Figures", 0) + formulaCell("B4", "SUMIFS(" + colRange("E") + "," + colRange("I") + ",\"NO\"," + colRange("K") + ",\"YES\")", summaryValue("totalBL"), 3) + inlineCell("C4", "Calculation Date", 0) + inlineCell("D4", document.getElementById("calculationDate").value, 6) + "</row>");
     summaryRows.push("<row r=\"5\">" + inlineCell("A5", "Average Ratio", 0) + formulaCell("B5", "IF(B4=0,\"\",B3/B4)", summaryValue("averageRatio"), 4, "number") + "</row>");
     summaryRows.push("<row r=\"6\">" + inlineCell("A6", "Lower Range", 0) + formulaCell("B6", "IF(B5=\"\",\"\",B5-0.003)", summaryValue("lowerRange"), 4, "number") + "</row>");
     summaryRows.push("<row r=\"7\">" + inlineCell("A7", "Upper Range", 0) + formulaCell("B7", "IF(B5=\"\",\"\",B5+0.003)", summaryValue("upperRange"), 4, "number") + "</row>");
@@ -891,7 +896,7 @@ function exportToExcel() {
         const voyageNumber = index + 1;
         return "IF(OR(H" + excelRow + "=\"NO\",I" + excelRow + "=\"YES\"),\", " + voyageNumber + "\",\"\")";
     });
-    const outsideFormula = "IF(COUNTIF(" + colRange("H") + ",\"NO\")+COUNTIF(" + colRange("I") + ",\"YES\")=0,\"None\",MID(CONCATENATE(" + outsideParts.join(",") + "),3,32767))";
+    const outsideFormula = outsideParts.length ? "IF(COUNTIF(" + colRange("H") + ",\"NO\")+COUNTIF(" + colRange("I") + ",\"YES\")=0,\"None\",MID(CONCATENATE(" + outsideParts.join(",") + "),3,32767))" : "\"None\"";
     summaryRows.push("<row r=\"9\">" + inlineCell("A9", "Voyages Outside Range", 0) + formulaCell("B9", outsideFormula, summaryText("outsideRange") === "None" ? "None" : summaryText("outsideRange"), 0, "string") + "</row>");
     summaryRows.push("<row r=\"10\">" + inlineCell("A10", "LOAD V.E.F.", 0) + formulaCell("B10", "IFERROR(SUMIF(" + colRange("H") + ",\"YES\"," + colRange("D") + ")/SUMIF(" + colRange("H") + ",\"YES\"," + colRange("E") + "),\"\")", summaryValue("finalVEF"), 5, "number") + "</row>");
 
@@ -905,11 +910,11 @@ function exportToExcel() {
         const blInput = row.querySelector(".bl").value;
         const ship = asNumber(shipInput);
         const bl = asNumber(blInput);
-        const validFigures = ship !== "" && bl !== "" && bl !== 0;
+        const validFigures = ship !== "" && bl !== "" && ship > 0 && bl > 0;
+        const eligible = validFigures && !row.querySelector(".ship").validity.stepMismatch && !row.querySelector(".bl").validity.stepMismatch;
         const manual = row.querySelector(".manual-exclude").checked;
         const manualText = manual ? "YES" : "NO";
         const appQualified = row.querySelector(".qualified").textContent.trim();
-        const appVlr = asNumber(row.querySelector(".vlr").textContent.trim());
         const differenceValue = validFigures ? ship - bl : "";
         const vlrValue = validFigures ? ship / bl : "";
         const qualifiedValue = appQualified === "YES" || appQualified === "NO" ? appQualified : "";
@@ -921,9 +926,10 @@ function exportToExcel() {
             numberCell("E" + excelRow, bl, 7),
             formulaCell("F" + excelRow, "IF(OR(D" + excelRow + "<=0,E" + excelRow + "<=0),\"\",D" + excelRow + "-E" + excelRow + ")", differenceValue, 3, "number"),
             formulaCell("G" + excelRow, "IF(OR(D" + excelRow + "<=0,E" + excelRow + "<=0),\"\",D" + excelRow + "/E" + excelRow + ")", vlrValue, 4, "number"),
-            formulaCell("H" + excelRow, "IF(OR(D" + excelRow + "<=0,E" + excelRow + "<=0),\"\",IF(I" + excelRow + "=\"YES\",\"NO\",IF($B$5=\"\",\"\",IF(AND(G" + excelRow + ">=$B$6,G" + excelRow + "<=$B$7),\"YES\",\"NO\"))))", qualifiedValue, 0, "string"),
+            formulaCell("H" + excelRow, "IF(I" + excelRow + "=\"YES\",\"NO\",IF(OR(K" + excelRow + "<>\"YES\",$B$5=\"\"),\"\",IF(ABS(G" + excelRow + "-$B$5)<=0.003+1.7763568394002505E-15*MAX(1,ABS(G" + excelRow + "),ABS($B$5)),\"YES\",\"NO\")))", qualifiedValue, 0, "string"),
             inlineCell("I" + excelRow, manualText, 6),
-            inlineCell("J" + excelRow, row.querySelector(".reason").value, 6)
+            inlineCell("J" + excelRow, row.querySelector(".reason").value, 6),
+            formulaCell("K" + excelRow, "IFERROR(IF(AND(ISNUMBER(D" + excelRow + "),ISNUMBER(E" + excelRow + "),D" + excelRow + ">0,E" + excelRow + ">0,ROUND(D" + excelRow + ",3)=D" + excelRow + ",ROUND(E" + excelRow + ",3)=E" + excelRow + "),\"YES\",\"NO\"),\"NO\")", eligible ? "YES" : "NO", 0, "string")
         ];
         return "<row r=\"" + excelRow + "\">" + cellParts.join("") + "</row>";
     }).join("");
@@ -939,7 +945,7 @@ function exportToExcel() {
     const worksheetXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
         '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
         '<sheetViews><sheetView workbookViewId="0" showGridLines="1"/></sheetViews>' +
-        '<cols><col min="1" max="1" width="25" customWidth="1"/><col min="2" max="2" width="22" customWidth="1"/><col min="3" max="3" width="28" customWidth="1"/><col min="4" max="5" width="16" customWidth="1"/><col min="6" max="6" width="14" customWidth="1"/><col min="7" max="8" width="13" customWidth="1"/><col min="9" max="9" width="15" customWidth="1"/><col min="10" max="10" width="25" customWidth="1"/></cols>' +
+        '<cols><col min="1" max="1" width="25" customWidth="1"/><col min="2" max="2" width="22" customWidth="1"/><col min="3" max="3" width="28" customWidth="1"/><col min="4" max="5" width="16" customWidth="1"/><col min="6" max="6" width="14" customWidth="1"/><col min="7" max="8" width="13" customWidth="1"/><col min="9" max="9" width="15" customWidth="1"/><col min="10" max="10" width="25" customWidth="1"/><col min="11" max="11" hidden="1" width="12" customWidth="1"/></cols>' +
         '<sheetData>' + rowsXml + '</sheetData>' +
         '<sheetProtection sheet="1" objects="1" scenarios="1" selectLockedCells="0" selectUnlockedCells="1" formatCells="0" formatColumns="0" formatRows="0" insertRows="0" insertColumns="0" deleteRows="0" deleteColumns="0" sort="0" autoFilter="0" pivotTables="0"/>' +
         '<mergeCells count="2"><mergeCell ref="A1:J1"/><mergeCell ref="A' + voyageHeadingRow + ':J' + voyageHeadingRow + '"/></mergeCells>' +
@@ -1134,7 +1140,8 @@ function downloadReport(blob, filename) {
 function exportToPDF() {
     calculateVEF();
     const state = collectCalculationState();
-    const rows = Array.from(document.querySelectorAll("#tableBody tr")).filter(row => {
+    const allRows = Array.from(document.querySelectorAll("#tableBody tr"));
+    const rows = allRows.filter(row => {
         return [".port", ".date", ".cargo", ".ship", ".bl", ".reason"].some(selector => row.querySelector(selector).value.trim()) || row.querySelector(".manual-exclude").checked;
     });
     const ascii = value => String(value ?? "").normalize("NFKD").replace(/[^\x20-\x7E]/g, "?").replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
@@ -1170,8 +1177,8 @@ function exportToPDF() {
             content += textOp(390, 464, "Voyages Outside Range: " + document.getElementById("outsideRange").textContent, 10);
             content += textOp(28, 439, "Total Ship's Figures: " + document.getElementById("totalShip").textContent, 9);
             content += textOp(260, 439, "Total B/L Figures: " + document.getElementById("totalBL").textContent, 9);
-            const qualified = rows.map((row, index) => ({row, index:index+1})).filter(item => item.row.querySelector(".qualified").textContent === "YES").map(item => item.index);
-            const excluded = rows.map((row, index) => ({row, index:index+1})).filter(item => item.row.querySelector(".manual-exclude").checked).map(item => item.index + (item.row.querySelector(".reason").value.trim() ? " (" + item.row.querySelector(".reason").value.trim() + ")" : ""));
+            const qualified = rows.map(row => ({row, index:allRows.indexOf(row)+1})).filter(item => item.row.querySelector(".qualified").textContent === "YES").map(item => item.index);
+            const excluded = rows.map(row => ({row, index:allRows.indexOf(row)+1})).filter(item => item.row.querySelector(".manual-exclude").checked).map(item => item.index + (item.row.querySelector(".reason").value.trim() ? " (" + item.row.querySelector(".reason").value.trim() + ")" : ""));
             content += textOp(28, 418, "Voyages used in LOAD V.E.F.: " + (qualified.length ? qualified.join(", ") : "None"), 9);
             content += textOp(28, 402, "Manually excluded voyages: " + (excluded.length ? excluded.join(", ") : "None"), 9);
             content += textOp(28, 378, "LOADED VOYAGES", 10, true);
@@ -1189,7 +1196,7 @@ function exportToPDF() {
             let columnX = 28;
             columns.forEach(([heading, width, getter]) => {
                 let value = getter(row);
-                if (heading === "Voyage / Port") value = (pageIndex * rowsPerPage + rowIndex + 1) + ". " + value;
+                if (heading === "Voyage / Port") value = (allRows.indexOf(row) + 1) + ". " + value;
                 const maxChars = Math.max(5, Math.floor((width - 4) / 3.4));
                 content += textOp(columnX + 2, y, String(value || "").slice(0, maxChars), 6.5);
                 columnX += width;
