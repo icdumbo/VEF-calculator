@@ -1,5 +1,8 @@
 # FULL Photo / Camera: exact Android failure and correction — draft PR #2
 
+Historical report. Current automatic Photo / Camera geometry and cell OCR: [Cell OCR report](full-photo-cell-import.md).
+
+
 Work is confined to `icdumbo/VEF-calculator`, `codex/full-photo-import`, draft PR #2. No merge, BASIC Android change, audited formula change, or GitHub Pages / main deployment. Only the existing separate owner-private preview is updated.
 
 ## Reproduced cause

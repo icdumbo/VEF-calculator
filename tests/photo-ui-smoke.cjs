@@ -11,7 +11,7 @@ const tsv=header+[[20,'STS'],[260,'03/04/2026'],[460,'OIL'],[660,'1001.25'],[850
 function app(draft) {
  const dom=new JSDOM(html,{url:'https://vef.example.test/',runScripts:'outside-only'}),w=dom.window;
  w.URL.createObjectURL=()=> 'blob:test';w.URL.revokeObjectURL=()=>{};
- w.HTMLCanvasElement.prototype.getContext=function(){const c=this;return {drawImage(...args){if(args.length===9){c.left=args[1];c.top=args[2];}},getImageData(){const data=new Uint8ClampedArray(c.width*c.height*4);data.fill(255);return {width:c.width,height:c.height,data};},putImageData(){}};};
+ w.HTMLCanvasElement.prototype.getContext=function(){const c=this;return {drawImage(...args){if(args.length===9){c.left=args[1];c.top=args[2];}},fillRect(){},getImageData(){const data=new Uint8ClampedArray(c.width*c.height*4);data.fill(255);if(c.width>=1000 && !w.noGrid)for(const y of [46,120])if(y<c.height)for(let x=0;x<c.width;x++){const i=(y*c.width+x)*4;data[i]=data[i+1]=data[i+2]=0;}return {width:c.width,height:c.height,data};},putImageData(){}};};
  w.HTMLDialogElement.prototype.showModal=function(){this.open=true;};
  w.HTMLDialogElement.prototype.close=function(){this.open=false;this.dispatchEvent(new w.Event('close'));};
  let terminated=0,recognized=0;
@@ -19,7 +19,7 @@ function app(draft) {
  const headerWords=[[20,10,'PORT'],[70,10,'TERMINAL'],[230,10,'B/L'],[260,10,'DATE'],[460,10,'CARGO'],[660,0,"SHIP'S"],[660,30,'FIGURES'],[850,0,'B/L'],[850,30,'FIGURES'],[0,10,'VOY'],[950,10,'Qualified']];
  const dataWords=[[20,'STS'],[260,'03/04/2026'],[460,'OIL'],[660,'1001.25'],[850,'1000.00']];
  const detectionTSV=header+headerWords.map(([x,y,text])=>[5,1,1,1,1,1,x,y,text.length*5,15,96,text].join('\t')).join('\n')+'\n'+dataWords.map(([x,text])=>[5,1,1,1,1,1,x,90,text.length*7,20,96,text].join('\t')).join('\n');
- w.Tesseract={createWorker:async()=>({setParameters:async p=>{psm=p.tessedit_pageseg_mode;if(psm==='6')column=0;},recognize:async canvas=>{recognized++;if(psm==='11')return {data:{tsv:w.badHeader?header:detectionTSV}};const entry=dataWords[column++];return {data:{tsv:header+[5,1,1,1,1,1,entry[0]-(canvas.left||0),90-(canvas.top||0),entry[1].length*7,20,96,entry[1]].join('\t')}};},terminate:async()=>{terminated++;}})};
+ w.Tesseract={createWorker:async()=>({setParameters:async p=>{psm=p.tessedit_pageseg_mode;if(['6','7','13'].includes(psm))column=0;},recognize:async canvas=>{recognized++;if(psm==='11')return {data:{tsv:w.badHeader?header:detectionTSV}};const entry=dataWords[column++];return {data:{tsv:header+[5,1,1,1,1,1,entry[0]-(canvas.left||0),90-(canvas.top||0),entry[1].length*7,20,96,entry[1]].join('\t')}};},terminate:async()=>{terminated++;}})};
  if(draft) w.localStorage.setItem('vef-calculator-current-v2',draft);
  w.eval(fs.readFileSync(path.join(__dirname,'../photo-geometry.js'),'utf8'));w.eval(importer);w.eval(script);
  return {dom,w,get terminated(){return terminated;},get recognized(){return recognized;}};
@@ -69,6 +69,10 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,20));
  for(const [field,bounds] of Object.entries({port:[0,25],date:[25,45],cargo:[45,65],ship:[65,82],bl:[82,100]}))for(const [i,edge] of ['start','end'].entries()){const input=fd.querySelector('#photo-'+field+'-'+edge);input.value=bounds[i];input.dispatchEvent(new fw.Event('input'));}
  fd.querySelector('#photoRead').click();await tick();assert.equal(fallback.recognized,7);assert.ok(fd.querySelector('#photoRows input'));assert.equal(fd.querySelectorAll('#photoRows input:checked').length,0);
  fw.badHeader=false;fd.querySelector('#photoAuto').click();await tick();assert.equal(fallback.recognized,13);assert.equal(fd.querySelector('#photoAdvanced').open,false);
+ const noGrid=app(),nw=noGrid.w,nd=nw.document;nw.noGrid=true;nw.VEFPhotoImport.open();
+ const ng=nd.querySelector('#photoFile');Object.defineProperty(ng,'files',{value:[new nw.File(['x'],'unruled.png',{type:'image/png'})]});ng.dispatchEvent(new nw.Event('change'));
+ const ni=nd.querySelector('#photoImage');Object.defineProperties(ni,{naturalWidth:{value:1000},naturalHeight:{value:150}});ni.dispatchEvent(new nw.Event('load'));await tick();
+ assert.match(nd.querySelector('#photoStatus').textContent,/Automatic row grid could not/);assert.equal(nd.querySelectorAll('#photoRows input').length,0);assert.equal(nd.querySelector('#photoAdvanced').open,true);noGrid.dom.window.close();
  fallback.dom.window.close();
  a.dom.window.close();restored.dom.window.close();console.log('PASS: DOM file / camera controls → OCR preview → explicit selection → editable append → edit / reload gate → Calculate; cancellation cleanup.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

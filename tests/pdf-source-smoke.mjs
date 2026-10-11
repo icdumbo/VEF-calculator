@@ -25,7 +25,9 @@ async function ocr(c,width,height) {
   const detector={setParameters:p=>wrapped.setParameters(p),recognize:(...args)=>{ocrCalls++;return wrapped.recognize(...args);}};
   const tsv=await parser.detectPhotoColumns(copy,detector,canvas.createCanvas);
   const detected=parser.detectPhotoTable(tsv,width,height,pixels);assert.ok(detected,'Automatic photo table / column detection without inspector mapping');
-  settings={regions:detected.regions,options:{...detected.options,numberMode:process.env.VEF_NUMBER_MODE || 'dot',dateOrder:'dmy'}};
+  settings={...detected,options:{...detected.options,numberMode:process.env.VEF_NUMBER_MODE || 'dot',dateOrder:'dmy'}};
+  const bands=parser.detectPhotoRows(pixels,settings);assert.ok(bands,'Verified horizontal row geometry');
+  return parser.recognizePhotoCells(c,settings,bands,detector,canvas.createCanvas);
  }
  const context=c.getContext('2d'),pixels=context.getImageData(0,0,width,height);
  parser.removeTableRules(pixels,settings.regions,settings.options);context.putImageData(pixels,0,0);
@@ -70,5 +72,6 @@ try{
  for(const row of rows){assert.equal(row.manualExclude,false);assert.equal(row.reason,'');assert.equal(row.qualified,undefined);assert.equal(row.voyage,undefined);}
  console.log(JSON.stringify(summary,null,2));
  if(process.env.VEF_SOURCE_RESULT) fs.writeFileSync(process.env.VEF_SOURCE_RESULT,JSON.stringify(summary,null,2));
+ if(mode==='photo' && process.env.VEF_PHOTO_AUTO==='1'){assert.equal(rows.length,expected.length,'Geometric row count');assert.equal(summary.wrongFields,0,'No wrong or shifted accepted fields');rows.forEach((r,i)=>assert.equal(r.sourceRow,i+1));}
  if(mode==='text'){assert.equal(summary.recognizedRows,expected.length);assert.equal(summary.correctFields,expected.length*5);assert.equal(summary.wrongFields,0);}
 }finally{if(worker)await worker.terminate();if(doc)await doc.destroy();}

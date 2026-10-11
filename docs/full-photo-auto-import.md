@@ -1,5 +1,8 @@
 # FULL automatic Photo / Camera import — draft PR #2
 
+Historical report. Current automatic Photo / Camera geometry and cell OCR: [Cell OCR report](full-photo-cell-import.md).
+
+
 Historical report for the first automatic implementation. The exact Android PNG failure, browser-model verification and current correction are documented in [Android photo detection fix](full-photo-android-fix.md). That report supersedes this report's Photo results for the newly supplied file.
 
 Scope: `icdumbo/VEF-calculator`, `codex/full-photo-import`, draft PR #2 only. No merge to main, BASIC Android change, mathematical formula change, or production GitHub Pages update. The separate owner-private Android preview is updated with the exact application files from this branch.

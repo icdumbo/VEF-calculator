@@ -194,7 +194,7 @@
             const pairs=quantities.filter(w=>inColumn(w,'ship') && quantities.some(b=>inColumn(b,'bl') && Math.abs((b.y+b.h/2)-(w.y+w.h/2))<Math.max(b.h,w.h)));
             if(!pairs.length)continue;
             const bottom=Math.min(candidateBottom,Math.max(...quantities.map(w=>w.y+w.h))+dateHeader.h/2);
-            const settings={regions,options:{top:top/height*100,bottom:bottom/height*100}};
+            const settings={regions,options:{top:top/height*100,bottom:bottom/height*100},evidence:{firstY:Math.min(...pairs.map(w=>w.y+w.h/2)),lastY:Math.max(...quantities.map(w=>w.y+w.h/2)),headerBottom:top,footerTop:total?.y}};
             try{parse('',width,height,regions,settings.options);return settings;}catch{continue;}
             }
         }
@@ -218,7 +218,68 @@
         }
         return tsv;
     }
-    const api = { quantity, date, parse, removeTableRules, recognizeColumns, tsvWords, detectPhotoTable, detectPhotoColumns };
+    // Photo only: line geometry fixes row identity before any cell OCR.
+    function detectPhotoRows(pixels, settings) {
+        const {width,height,data}=pixels, ranges=Object.values(settings.regions);
+        if(fields.some(f=>!settings.regions[f]))return null;
+        const left=Math.ceil(Math.min(...ranges.map(r=>r[0]))/100*width),right=Math.floor(Math.max(...ranges.map(r=>r[1]))/100*width);
+        const top=settings.options.top/100*height,bottom=settings.options.bottom/100*height;
+        const last=settings.evidence?.lastY ?? bottom-10,footer=settings.evidence?.footerTop;
+        const lines=[];let group=[];
+        const flush=()=>{if(group.length)lines.push({y:(group[0]+group.at(-1))/2,start:group[0],end:group.at(-1)});group=[];};
+        for(let y=Math.max(0,Math.floor(top-40));y<Math.min(height,Math.ceil((footer ?? bottom)+60));y++){
+            let n=0;for(let x=left;x<right;x++){const i=(y*width+x)*4;if(data[i]*.299+data[i+1]*.587+data[i+2]*.114<140)n++;}
+            if(n/Math.max(1,right-left)>.60)group.push(y);else flush();
+        }flush();
+        const start=lines.findIndex(l=>l.y>=top-12),end=Number.isFinite(footer)?lines.findLastIndex(l=>l.y<footer):lines.findIndex(l=>l.y>last);
+        if(start<0 || end<=start)return null;
+        const selected=lines.slice(start,end+1),gaps=selected.slice(1).map((l,i)=>l.y-selected[i].y),sorted=[...gaps].sort((a,b)=>a-b),median=sorted[Math.floor(sorted.length/2)];
+        // Missing rules / prose / merged geometry require explicit correction, never guessed row splitting.
+        if(gaps.length>100 || median<8 || gaps.some(g=>g<median*.65 || g>median*1.45))return null;
+        return selected.slice(1).map((l,i)=>({top:selected[i].end+2,bottom:l.start-2}));
+    }
+    function preparePhotoCell(canvas, bounds, makeCanvas, targetHeight=60) {
+        const {left,right,top,bottom}=bounds,w=right-left,h=bottom-top;
+        const scale=Math.min(3,Math.max(1,targetHeight/h),1800/w),pad=12;
+        const out=makeCanvas(Math.ceil(w*scale)+pad*2,Math.ceil(h*scale)+pad*2),ctx=out.getContext('2d');
+        ctx.fillStyle='white';ctx.fillRect(0,0,out.width,out.height);
+        ctx.drawImage(canvas,left,top,w,h,pad,pad,w*scale,h*scale);
+        const pixels=ctx.getImageData(0,0,out.width,out.height),hist=new Uint32Array(256);
+        for(let i=0;i<pixels.data.length;i+=4){const v=Math.round(pixels.data[i]*.299+pixels.data[i+1]*.587+pixels.data[i+2]*.114);hist[v]++;}
+        const count=out.width*out.height;let low=0,sum=0;for(;low<255;low++){sum+=hist[low];if(sum>=count*.01)break;}
+        let high=255;sum=0;for(;high>low;high--){sum+=hist[high];if(sum>=count*.95)break;}
+        for(let i=0;i<pixels.data.length;i+=4){const gray=pixels.data[i]*.299+pixels.data[i+1]*.587+pixels.data[i+2]*.114;const v=high-low>40?Math.max(0,Math.min(255,(gray-low)*255/(high-low))):gray;pixels.data[i]=pixels.data[i+1]=pixels.data[i+2]=v;pixels.data[i+3]=255;}
+        ctx.putImageData(pixels,0,0);return out;
+    }
+    async function recognizePhotoCells(canvas, settings, rowBands, worker, makeCanvas, progress=()=>{}) {
+        const rows=[];
+        await worker.setParameters({tessedit_pageseg_mode:'7',preserve_interword_spaces:'1'});
+        for(let i=0;i<rowBands.length;i++){
+            const row={warnings:[],raw:{},manualExclude:false,reason:'',sourceRow:i+1};
+            for(const f of fields){
+                progress(i+1,rowBands.length,f);
+                const [a,b]=settings.regions[f],band=rowBands[i];
+                const bounds={left:Math.ceil(a/100*canvas.width)+3,right:Math.floor(b/100*canvas.width)-3,top:band.top,bottom:band.bottom};
+                if(bounds.right<=bounds.left || bounds.bottom<=bounds.top)throw new Error('Invalid cell geometry; use Advanced correction.');
+                const cell=preparePhotoCell(canvas,bounds,makeCanvas),result=await worker.recognize(cell,{}, {tsv:true});
+                let words=tsvWords(result.data.tsv || '').sort((a,b)=>Math.abs(a.y-b.y)>Math.min(a.h,b.h)*.6?a.y-b.y:a.x-b.x);
+                const raw=words.map(w=>w.text).join(' '),threshold=['ship','bl','date'].includes(f)?85:70;
+                if(raw && words.some(w=>w.conf<threshold)){
+                    const retry=await worker.recognize(preparePhotoCell(canvas,bounds,makeCanvas,80),{}, {tsv:true});
+                    const alternative=tsvWords(retry.data.tsv || '').sort((a,b)=>Math.abs(a.y-b.y)>Math.min(a.h,b.h)*.6?a.y-b.y:a.x-b.x);
+                    // Retry can improve confidence only on exactly agreeing text; never choose a conflicting reading.
+                    if(alternative.map(w=>w.text).join(' ')===raw && alternative.every(w=>w.conf>=threshold))words=alternative;
+                }
+                row.raw[f]=raw;
+                row[f]=words.some(w=>w.conf<threshold)?'':['ship','bl'].includes(f)?quantity(raw,settings.options.numberMode):f==='date'?date(raw,settings.options.dateOrder):raw;
+                if(!row[f])row.warnings.push(labels[fields.indexOf(f)]+(raw?': unreadable / ambiguous ('+raw+')':': missing'));
+            }
+            // A blank cell, or extra OCR fragment, cannot create, delete or shift a geometric row.
+            rows.push(row);
+        }
+        return rows;
+    }
+    const api = { quantity, date, parse, removeTableRules, recognizeColumns, tsvWords, detectPhotoTable, detectPhotoColumns, detectPhotoRows, preparePhotoCell, recognizePhotoCells };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     root.VEFPhotoImport = api;
     if (typeof document === 'undefined') return;
@@ -420,8 +481,13 @@
                     status('Automatic table detection could not identify reliable columns. Try a clearer, upright photo including the headers, or use Advanced correction and Read selected source. No data was imported.');
                     return;
                 }
-                settings={regions:detected.regions,options:{...settings.options,...detected.options}};
+                settings={...detected,options:{...settings.options,...detected.options}};
                 applyDetectedTable(settings);
+                const bands=detectPhotoRows(pixels,settings);
+                if(!bands){el('photoAdvanced').open=true;status('Automatic row grid could not be verified. Use a clearer photo or Advanced correction. No data was imported.');return;}
+                const rows=await recognizePhotoCells(canvas,settings,bands,w,(width,height)=>{const c=document.createElement('canvas');c.width=width;c.height=height;return c;},(i,n,f)=>{if(token!==generation)throw new Error('Source changed.');status('Reading table cells: row '+i+' / '+n+' — '+labels[fields.indexOf(f)]);});
+                if(token===generation){rows.forEach(row=>{row.source='Photo cell OCR — geometric row '+row.sourceRow;});render(rows);status(rows.length+' table rows found. All cells stay in their geometric row. Verify, select and import; no VEF is calculated.');if(typeof el('photoRows').scrollIntoView==='function')el('photoRows').scrollIntoView({block:'start'});}
+                return;
             }
             if (typeof context.getImageData === 'function') {
                 const pixels=context.getImageData(0,0,canvas.width,canvas.height);
