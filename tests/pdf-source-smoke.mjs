@@ -22,7 +22,8 @@ async function ocr(c,width,height) {
  const wrapped={setParameters:p=>worker.setParameters(p),recognize:(crop,options,output)=>worker.recognize(crop.toBuffer('image/png'),options,output)};
  if(mode==='photo' && process.env.VEF_PHOTO_AUTO==='1') {
   const pixels=c.getContext('2d').getImageData(0,0,width,height),copy=canvas.createCanvas(width,height);copy.getContext('2d').drawImage(c,0,0);
-  const tsv=await parser.detectPhotoColumns(copy,wrapped);ocrCalls++;
+  const detector={setParameters:p=>wrapped.setParameters(p),recognize:(...args)=>{ocrCalls++;return wrapped.recognize(...args);}};
+  const tsv=await parser.detectPhotoColumns(copy,detector,canvas.createCanvas);
   const detected=parser.detectPhotoTable(tsv,width,height,pixels);assert.ok(detected,'Automatic photo table / column detection without inspector mapping');
   settings={regions:detected.regions,options:{...detected.options,numberMode:process.env.VEF_NUMBER_MODE || 'dot',dateOrder:'dmy'}};
  }
@@ -37,8 +38,9 @@ async function ocr(c,width,height) {
 try{
  if(mode==='photo'){
   assert.ok(settings || process.env.VEF_PHOTO_AUTO==='1','Photo needs automatic detection or inspector mapping');
-  const img=await canvas.loadImage(input),scale=Math.min(1,3000/Math.max(img.width,img.height));
-  const c=canvas.createCanvas(Math.round(img.width*scale),Math.round(img.height*scale));c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+  const img=await canvas.loadImage(input),scale=Math.min(process.env.VEF_PHOTO_AUTO==='1'?2:1,3000/Math.max(img.width,img.height));
+  let c=canvas.createCanvas(Math.round(img.width*scale),Math.round(img.height*scale));c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+  if(process.env.VEF_PHOTO_AUTO==='1'){const geometry=require('../photo-geometry.js');const prepared=geometry.normalize(c,canvas.createCanvas);c=prepared.canvas;}
   rows=await ocr(c,c.width,c.height);
  }else{
   doc=await pdfjs.getDocument({data:new Uint8Array(fs.readFileSync(input)),isEvalSupported:false,standardFontDataUrl:pdfRoot+'/standard_fonts/',cMapUrl:pdfRoot+'/cmaps/',cMapPacked:true,wasmUrl:pdfRoot+'/wasm/'}).promise;

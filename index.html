@@ -304,6 +304,8 @@
         <p id="photoStatus" role="status" aria-live="polite">Select Camera, Photo / Gallery or PDF. Source files are not saved with the calculation.</p>
         <p>Photo / Camera recognition starts automatically after selection. Review the detected rows below. If the table cannot be identified, try a clearer photo with its headers or open Advanced correction.</p>
         <img id="photoImage" alt="Selected VEF report" style="display:block;width:100%;height:auto;margin:12px 0;touch-action:pan-y">
+        <p id="photoCorrectionNote" hidden>Recognition uses the corrected copy below. The original above is unchanged. Advanced column bounds refer to the corrected copy.</p>
+        <img id="photoCorrected" hidden alt="Geometrically corrected copy for recognition" style="width:100%;height:auto;margin:12px 0;touch-action:pan-y">
         <details id="photoAdvanced"><summary>Advanced correction — optional column / table bounds</summary>
         <p>Assign the left and right bounds of each available column as percentages of the photo width (0 = left edge, 100 = right edge). Leave both bounds blank for an unavailable column. Do not overlap columns. Include only the voyage table area.</p>
         <label>Tap photo to set <select id="photoBound"><option value="">Choose a column edge</option></select></label>
@@ -381,6 +383,7 @@
 
 </div>
 
+<script src="photo-geometry.js"></script>
 <script src="photo-import.js"></script>
 <script src="pdf-import.js"></script>
 <script>

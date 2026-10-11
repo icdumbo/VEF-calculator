@@ -132,19 +132,31 @@
     }
     // Header aliases affect geometry only: never repair or invent a cell value.
     function detectPhotoTable(tsv, width, height, pixels) {
-        const words=tsvWords(tsv), clean=s=>s.toUpperCase().replace(/[’‘]/g,"'").replace(/[^A-Z0-9/']/g,'');
+        const clean=s=>s.toUpperCase().replace(/[’‘]/g,"'").replace(/[^A-Z0-9/']/g,'');
+        const words=tsvWords(tsv).flatMap(w=>{
+            const c=clean(w.text);let parts;
+            if(/^(B\/L|BL|BIL|B1L)DATE$/.test(c))parts=[c.slice(0,-4),'DATE'];
+            else if(/^SHIP'?S?FIGURES$/.test(c))parts=[c.slice(0,-7),'FIGURES'];
+            else if(/^PORT\/?TERMINAL$/.test(c))parts=['PORT','TERMINAL'];
+            if(!parts)return [w];let offset=0;const n=parts.join('').length;
+            return parts.map(text=>{const out={...w,text,x:w.x+w.w*offset/n,w:w.w*text.length/n};offset+=text.length;return out;});
+        });
+        const isBL=w=>['B/L','BL','BIL','B1L'].includes(clean(w.text));
         const center=w=>w.x+w.w/2;
         const span=ws=>({x:Math.min(...ws.map(w=>w.x)),right:Math.max(...ws.map(w=>w.x+w.w)),y:Math.min(...ws.map(w=>w.y)),bottom:Math.max(...ws.map(w=>w.y+w.h))});
         for(const dateHeader of words.filter(w=>clean(w.text)==='DATE' && w.conf>=60)) {
-            const band=words.filter(w=>w.conf>=45 && Math.abs(w.y-dateHeader.y)<dateHeader.h*4);
-            const port=band.find(w=>/PORT$/.test(clean(w.text))),terminal=band.find(w=>/^TERMINA[LІI1]$/.test(clean(w.text)));
+            const band=words.filter(w=>(w.conf>=45 || isBL(w)) && Math.abs(w.y-dateHeader.y)<dateHeader.h*6);
+            const terminal=band.find(w=>/^TERMINA[LІI1]$/.test(clean(w.text)));
+            let port=band.filter(w=>/PORT$/.test(clean(w.text)) && (!terminal || w.x<terminal.x)).sort((a,b)=>Math.abs(a.y-dateHeader.y)-Math.abs(b.y-dateHeader.y))[0];
+            if(port && /^VOY(?:AGE)?(?:NO)?PORT$/.test(clean(port.text))){const index=port.text.toUpperCase().lastIndexOf('PORT');port={...port,x:port.x+port.w*index/port.text.length,w:port.w*4/port.text.length,text:'PORT'};}
             const cargo=band.find(w=>clean(w.text)==='CARGO'),ship=band.find(w=>/^SHIP'?S?$/.test(clean(w.text)));
-            const bls=band.filter(w=>['B/L','BL'].includes(clean(w.text)));
+            const bls=band.filter(isBL);
             const dateBL=bls.find(w=>w.x<dateHeader.x && dateHeader.x-w.x-w.w<dateHeader.h*2 && Math.abs(w.y-dateHeader.y)<dateHeader.h);
             const bl=bls.find(w=>w!==dateBL && ship && w.x>ship.x);
-            if(!ship || !bl || !port || (!dateBL && (!cargo || !terminal))) continue;
-            const figures=band.filter(w=>clean(w.text)==='FIGURES');
-            const near=a=>figures.filter(w=>Math.abs(center(w)-center(a))<dateHeader.h*2.5);
+            if(!ship || !bl || !port || (!dateBL && (!cargo || !terminal || dateHeader.x>=cargo.x))) continue;
+            const figures=band.filter(w=>clean(w.text)==='FIGURES' && w.conf>=70);
+            const near=a=>figures.filter(w=>w.y>=a.y && Math.abs(center(w)-center(a))<dateHeader.h*2.5);
+            if((clean(bl.text)!=='B/L' || bl.conf<45) && !near(bl).length)continue;
             const anchors={port:span([port,...(terminal?[terminal]:[])]),date:span([dateHeader,...(dateBL?[dateBL]:[])]),ship:span([ship,...near(ship)]),bl:span([bl,...near(bl)])};
             if(cargo) anchors.cargo=span([cargo]);
             const sorted=Object.entries(anchors).map(([f,a])=>({f,...a})).sort((a,b)=>a.x-b.x);
@@ -164,10 +176,11 @@
                 }
                 flush();
             }
+            for(const useRules of [true,false]) {
             const regions={};
             for(let i=0;i<sorted.length;i++) {
                 const a=sorted[i],c=(a.x+a.right)/2;
-                const leftRule=edges.filter(x=>x<c).at(-1),rightRule=edges.find(x=>x>c);
+                const leftRule=useRules?edges.filter(x=>x<c).at(-1):undefined,rightRule=useRules?edges.find(x=>x>c):undefined;
                 const ignored=band.filter(w=>w.x>a.right && !sorted.some(a=>w.x>=a.x && w.x<a.right)).sort((a,b)=>a.x-b.x)[0];
                 const left=leftRule??(i?(sorted[i-1].right+a.x)/2:Math.max(0,a.x-dateHeader.h));
                 const right=rightRule??(i+1<sorted.length?(a.right+sorted[i+1].x)/2:ignored?(a.right+ignored.x)/2:Math.min(width,a.right+dateHeader.h*2));
@@ -183,16 +196,27 @@
             const bottom=Math.min(candidateBottom,Math.max(...quantities.map(w=>w.y+w.h))+dateHeader.h/2);
             const settings={regions,options:{top:top/height*100,bottom:bottom/height*100}};
             try{parse('',width,height,regions,settings.options);return settings;}catch{continue;}
+            }
         }
         return null;
     }
-    async function detectPhotoColumns(canvas, worker) {
+    async function detectPhotoColumns(canvas, worker, makeCanvas) {
         const context=canvas.getContext('2d'),pixels=context.getImageData(0,0,canvas.width,canvas.height);
         // This is a disposable OCR copy, not the original image or the later column OCR canvas.
         removeTableRules(pixels,{all:[0,100]});context.putImageData(pixels,0,0);
         await worker.setParameters({tessedit_pageseg_mode:'11',preserve_interword_spaces:'1'});
         const result=await worker.recognize(canvas,{}, {tsv:true});
-        return result.data.tsv || '';
+        let tsv=result.data.tsv || '';
+        if(makeCanvas && !detectPhotoTable(tsv,canvas.width,canvas.height)) {
+            // Retry the header area as a block. Its short height lets grid removal
+            // clear thin vertical rules without requiring page-height table lines.
+            const crop=makeCanvas(canvas.width,Math.ceil(canvas.height*.4)),ctx=crop.getContext('2d');
+            ctx.drawImage(canvas,0,0);const data=ctx.getImageData(0,0,crop.width,crop.height);
+            removeTableRules(data,{all:[0,100]});ctx.putImageData(data,0,0);
+            await worker.setParameters({tessedit_pageseg_mode:'6',preserve_interword_spaces:'1'});
+            const retry=await worker.recognize(crop,{}, {tsv:true});tsv+='\n'+(retry.data.tsv || '');
+        }
+        return tsv;
     }
     const api = { quantity, date, parse, removeTableRules, recognizeColumns, tsvWords, detectPhotoTable, detectPhotoColumns };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
@@ -202,6 +226,7 @@
     let pdfTask, pdfDocument, pdfWords = [], pdfViewport, pdfCanvas, renderTask, pdfLoading;
     let sourceType = 'photo';
     let manualMapping = false;
+    let photoPreparedCanvas = null;
     const el = id => document.getElementById(id);
     function status(text) { el('photoStatus').textContent = text; }
     function invalidate() {
@@ -219,6 +244,7 @@
         if (photoURL) URL.revokeObjectURL(photoURL);
         photoURL = null; image.removeAttribute('src'); el('photoFile').value = ''; el('photoCamera').value = '';
         image.onload=null; image.onerror=null; manualMapping=false; el('photoAdvanced').open=false;
+        photoPreparedCanvas=null;el('photoCorrected').removeAttribute('src');el('photoCorrected').hidden=true;el('photoCorrectionNote').hidden=true;
         fields.forEach(f => ['start','end'].forEach(edge => { el('photo-' + f + '-' + edge).value = ''; }));
         el('photoBound').value = ''; el('photoTop').value = '0'; el('photoBottom').value = '100';
         el('photoRead').disabled = true;
@@ -354,13 +380,20 @@
                 rows.forEach(row => { row.source += ' — page ' + el('pdfPage').value; });
                 render(rows); return;
             }
-            const canvas = document.createElement('canvas');
-            const scale = Math.min(1, 3000 / Math.max(image.naturalWidth, image.naturalHeight));
+            let canvas = document.createElement('canvas');
+            const scale = Math.min(automatic ? 2 : 1, 3000 / Math.max(image.naturalWidth, image.naturalHeight));
             if (sourceType === 'pdf') {
                 canvas.width=pdfCanvas.width; canvas.height=pdfCanvas.height; canvas.getContext('2d').drawImage(pdfCanvas,0,0);
+            } else if(photoPreparedCanvas) {
+                canvas.width=photoPreparedCanvas.width;canvas.height=photoPreparedCanvas.height;canvas.getContext('2d').drawImage(photoPreparedCanvas,0,0);
             } else {
                 canvas.width = Math.round(image.naturalWidth * scale); canvas.height = Math.round(image.naturalHeight * scale);
                 canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+            }
+            if(automatic && !photoPreparedCanvas && root.VEFPhotoGeometry) {
+                status('Checking photo alignment / perspective before header recognition…');
+                const prepared=root.VEFPhotoGeometry.normalize(canvas,(width,height)=>{const c=document.createElement('canvas');c.width=width;c.height=height;return c;});
+                if(prepared.corrected){canvas=prepared.canvas;photoPreparedCanvas=canvas;el('photoCorrected').src=canvas.toDataURL('image/png');el('photoCorrected').hidden=false;el('photoCorrectionNote').hidden=false;}
             }
             const context=canvas.getContext('2d');
             status('Downloading / starting local OCR. The photo stays in this browser.');
@@ -379,7 +412,7 @@
                 const pixels=context.getImageData(0,0,canvas.width,canvas.height);
                 const detectionCanvas=document.createElement('canvas');detectionCanvas.width=canvas.width;detectionCanvas.height=canvas.height;
                 detectionCanvas.getContext('2d').drawImage(canvas,0,0);
-                const headerTSV=await detectPhotoColumns(detectionCanvas,w);
+                const headerTSV=await detectPhotoColumns(detectionCanvas,w,(width,height)=>{const c=document.createElement('canvas');c.width=width;c.height=height;return c;});
                 if(token!==generation)return;
                 const detected=detectPhotoTable(headerTSV,canvas.width,canvas.height,pixels);
                 if(!detected) {
@@ -427,15 +460,17 @@
             }); mapping.appendChild(row);
         });
         // Tap / click the preview to fill a focused column bound, or type its percentage.
-        image.addEventListener('pointerdown', event => {
+        const recordBound = event => {
             const selected = el('photoBound').value;
             if (!selected) return;
-            const rect = image.getBoundingClientRect();
+            if(photoPreparedCanvas && event.currentTarget===image)return;
+            const rect = event.currentTarget.getBoundingClientRect();
             el(selected).value = Math.max(0, Math.min(100, (event.clientX - rect.left) / rect.width * 100)).toFixed(1);
             manualMapping=true;
             invalidate();
             status('Column bound recorded. Check all start / end percentages before reading.');
-        });
+        };
+        image.addEventListener('pointerdown',recordBound);el('photoCorrected').addEventListener('pointerdown',recordBound);
         fields.forEach((f,i) => ['start','end'].forEach(edge => { const opt = document.createElement('option'); opt.value = 'photo-' + f + '-' + edge; opt.textContent = labels[i] + ' ' + edge; el('photoBound').appendChild(opt); }));
         el('photoFile').addEventListener('change', e => selectFile(e.target.files[0]));
         el('photoCamera').addEventListener('change', e => selectFile(e.target.files[0]));

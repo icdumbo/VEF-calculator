@@ -40,3 +40,23 @@ test('automatic discovery performs one sparse OCR pass on a disposable image bef
  const w={setParameters:async p=>calls.push(p.tessedit_pageseg_mode),recognize:async(c,o,output)=>{assert.equal(c,canvas);assert.equal(output.tsv,true);calls.push('ocr');return {data:{tsv:'test'}};}};
  assert.equal(await detectPhotoColumns(canvas,w),'test');assert.deepEqual(calls,['copy','11','ocr']);
 });
+test('header geometry works without grid lines, including BIL / combined headings and VOY|PORT',()=>{
+ const h=headers.filter(w=>!['VOY','PORT','B/L','DATE'].includes(w.text));
+ h.push(word(10,30,'VOY|PORT',96,100),word(280,30,'B/LDATE',96,80),word(850,10,'BIL',6,20));
+ const s=detectPhotoTable(tsv([...h,...data]),1100,250);assert.ok(s);assert.ok(s.regions.port);assert.ok(s.regions.bl);
+ const r=parse(tsv(data),1100,250,s.regions,{...s.options,numberMode:'dot'});assert.equal(r.length,2);assert.equal(r[0].port,'STS');assert.equal(r[0].bl,'1000');
+ // A weak BIL token without its corroborating FIGURES anchor must not map a quantity column.
+ assert.equal(detectPhotoTable(tsv([...h.filter(w=>!(w.text==='FIGURES' && w.x===850)),...data]),1100,250),null);
+});
+test('header aliases affect positions only; low-confidence data is still blank and cell text is never repaired',()=>{
+ const s=detectPhotoTable(tsv([...headers,...data]),1100,250);assert.ok(s);
+ const values=data.map(w=>w.text==='OIL'?{...w,text:'BIL'}:w.text==='1001.25'?{...w,conf:84}:w);
+ const rows=parse(tsv(values),1100,250,s.regions,{...s.options,numberMode:'dot'});
+ assert.equal(rows[0].cargo,'BIL');assert.equal(rows[0].ship,'');assert.equal(rows[0].raw.ship,'1001.25');
+});
+test('incompatible vertical rules retry semantic header boundaries instead of aborting a readable table',()=>{
+ const width=1100,height=250,pixels={width,height,data:new Uint8ClampedArray(width*height*4)};pixels.data.fill(255);
+ for(const x of [65,1050])for(let y=0;y<height;y++){const i=(y*width+x)*4;pixels.data[i]=pixels.data[i+1]=pixels.data[i+2]=0;}
+ const s=detectPhotoTable(tsv([...headers,...data]),width,height,pixels);assert.ok(s);
+ const rows=parse(tsv(data),width,height,s.regions,{...s.options,numberMode:'dot'});assert.equal(rows.length,2);assert.equal(rows[0].ship,'1001.25');assert.equal(rows[0].bl,'1000');
+});
