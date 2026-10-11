@@ -18,17 +18,25 @@ const expected=JSON.parse(fs.readFileSync(oraclePath));
 let settings=mappingPath?JSON.parse(fs.readFileSync(mappingPath)):null;
 let doc,worker,rows=[],ocrCalls=0;
 async function ocr(c,width,height) {
+ if(!worker){worker=await createWorker('eng',1,process.env.VEF_OCR_LANG_PATH?{langPath:process.env.VEF_OCR_LANG_PATH,gzip:false,cacheMethod:'none'}:{});}
+ const wrapped={setParameters:p=>worker.setParameters(p),recognize:(crop,options,output)=>worker.recognize(crop.toBuffer('image/png'),options,output)};
+ if(mode==='photo' && process.env.VEF_PHOTO_AUTO==='1') {
+  const pixels=c.getContext('2d').getImageData(0,0,width,height),copy=canvas.createCanvas(width,height);copy.getContext('2d').drawImage(c,0,0);
+  const tsv=await parser.detectPhotoColumns(copy,wrapped);ocrCalls++;
+  const detected=parser.detectPhotoTable(tsv,width,height,pixels);assert.ok(detected,'Automatic photo table / column detection without inspector mapping');
+  settings={regions:detected.regions,options:{...detected.options,numberMode:process.env.VEF_NUMBER_MODE || 'dot',dateOrder:'dmy'}};
+ }
  const context=c.getContext('2d'),pixels=context.getImageData(0,0,width,height);
  parser.removeTableRules(pixels,settings.regions,settings.options);context.putImageData(pixels,0,0);
 
- if(!worker){worker=await createWorker('eng',1,process.env.VEF_OCR_LANG_PATH?{langPath:process.env.VEF_OCR_LANG_PATH,gzip:false,cacheMethod:'none'}:{});await worker.setParameters({tessedit_pageseg_mode:'6',preserve_interword_spaces:'1'});}
+ await worker.setParameters({tessedit_pageseg_mode:'6',preserve_interword_spaces:'1'});
  ocrCalls+=Object.keys(settings.regions).length;
  const tsv=await parser.recognizeColumns(c,settings,{recognize:(crop,options,output)=>worker.recognize(crop.toBuffer('image/png'),options,output)},canvas.createCanvas);
  return parser.parse(tsv,width,height,settings.regions,settings.options);
 }
 try{
  if(mode==='photo'){
-  assert.ok(settings,'Photo requires inspector mapping');
+  assert.ok(settings || process.env.VEF_PHOTO_AUTO==='1','Photo needs automatic detection or inspector mapping');
   const img=await canvas.loadImage(input),scale=Math.min(1,3000/Math.max(img.width,img.height));
   const c=canvas.createCanvas(Math.round(img.width*scale),Math.round(img.height*scale));c.getContext('2d').drawImage(img,0,0,c.width,c.height);
   rows=await ocr(c,c.width,c.height);

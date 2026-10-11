@@ -1,5 +1,7 @@
 # FULL: Camera / Photo / PDF import — PR #2 review report
 
+Historical report for the PDF extension. Current Photo / Camera automatic detection and updated tests: [Automatic photo import](full-photo-auto-import.md). PDF direct extraction described here remains unchanged.
+
 Work stays on `codex/full-photo-import` in draft PR #2. No merge, deployment, BASIC Android change or change to the audited VEF formulas is part of this work.
 
 ## Inspector workflow

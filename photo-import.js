@@ -1,4 +1,4 @@
-/* FULL only. Conservative, local OCR with inspector-assigned column regions. */
+/* FULL only. Local OCR with automatic table detection and optional manual correction. */
 (function (root) {
     'use strict';
     const fields = ['port', 'date', 'cargo', 'ship', 'bl'];
@@ -124,13 +124,84 @@
         }
         return lines.join('\n');
     }
-    const api = { quantity, date, parse, removeTableRules, recognizeColumns };
+    function tsvWords(tsv) {
+        return tsv.split(/\r?\n/).map(line => {
+            const p=line.split('\t');
+            return {level:+p[0],x:+p[6],y:+p[7],w:+p[8],h:+p[9],conf:+p[10],text:p.slice(11).join('\t').trim()};
+        }).filter(w=>w.level===5 && w.text && w.w>0 && w.h>0 && [w.x,w.y,w.conf].every(Number.isFinite));
+    }
+    // Header aliases affect geometry only: never repair or invent a cell value.
+    function detectPhotoTable(tsv, width, height, pixels) {
+        const words=tsvWords(tsv), clean=s=>s.toUpperCase().replace(/[’‘]/g,"'").replace(/[^A-Z0-9/']/g,'');
+        const center=w=>w.x+w.w/2;
+        const span=ws=>({x:Math.min(...ws.map(w=>w.x)),right:Math.max(...ws.map(w=>w.x+w.w)),y:Math.min(...ws.map(w=>w.y)),bottom:Math.max(...ws.map(w=>w.y+w.h))});
+        for(const dateHeader of words.filter(w=>clean(w.text)==='DATE' && w.conf>=60)) {
+            const band=words.filter(w=>w.conf>=45 && Math.abs(w.y-dateHeader.y)<dateHeader.h*4);
+            const port=band.find(w=>/PORT$/.test(clean(w.text))),terminal=band.find(w=>/^TERMINA[LІI1]$/.test(clean(w.text)));
+            const cargo=band.find(w=>clean(w.text)==='CARGO'),ship=band.find(w=>/^SHIP'?S?$/.test(clean(w.text)));
+            const bls=band.filter(w=>['B/L','BL'].includes(clean(w.text)));
+            const dateBL=bls.find(w=>w.x<dateHeader.x && dateHeader.x-w.x-w.w<dateHeader.h*2 && Math.abs(w.y-dateHeader.y)<dateHeader.h);
+            const bl=bls.find(w=>w!==dateBL && ship && w.x>ship.x);
+            if(!ship || !bl || !port || (!dateBL && (!cargo || !terminal))) continue;
+            const figures=band.filter(w=>clean(w.text)==='FIGURES');
+            const near=a=>figures.filter(w=>Math.abs(center(w)-center(a))<dateHeader.h*2.5);
+            const anchors={port:span([port,...(terminal?[terminal]:[])]),date:span([dateHeader,...(dateBL?[dateBL]:[])]),ship:span([ship,...near(ship)]),bl:span([bl,...near(bl)])};
+            if(cargo) anchors.cargo=span([cargo]);
+            const sorted=Object.entries(anchors).map(([f,a])=>({f,...a})).sort((a,b)=>a.x-b.x);
+            if(sorted.some((a,i)=>i && a.x<sorted[i-1].right)) continue;
+            const top=Math.max(...sorted.map(a=>a.bottom))+1;
+            const total=words.filter(w=>w.y>top && /^TOTALS?$/.test(clean(w.text))).sort((a,b)=>a.y-b.y)[0];
+            const candidateBottom=total?total.y-1:height;
+            // Vertical rules, when present, define actual cells, including a separate Voyage column.
+            const edges=[];
+            if(pixels && pixels.width===width && pixels.height===height) {
+                const from=Math.max(0,Math.floor(Math.min(...sorted.map(a=>a.y)))),to=Math.min(height,Math.ceil(candidateBottom));
+                let group=[];
+                const flush=()=>{if(group.length)edges.push((group[0]+group[group.length-1])/2);group=[];};
+                for(let x=0;x<width;x++) {
+                    let count=0;for(let y=from;y<to;y++){const i=(y*width+x)*4;if(pixels.data[i]<110 && pixels.data[i+1]<110 && pixels.data[i+2]<110)count++;}
+                    if(count/Math.max(1,to-from)>0.55)group.push(x);else flush();
+                }
+                flush();
+            }
+            const regions={};
+            for(let i=0;i<sorted.length;i++) {
+                const a=sorted[i],c=(a.x+a.right)/2;
+                const leftRule=edges.filter(x=>x<c).at(-1),rightRule=edges.find(x=>x>c);
+                const ignored=band.filter(w=>w.x>a.right && !sorted.some(a=>w.x>=a.x && w.x<a.right)).sort((a,b)=>a.x-b.x)[0];
+                const left=leftRule??(i?(sorted[i-1].right+a.x)/2:Math.max(0,a.x-dateHeader.h));
+                const right=rightRule??(i+1<sorted.length?(a.right+sorted[i+1].x)/2:ignored?(a.right+ignored.x)/2:Math.min(width,a.right+dateHeader.h*2));
+                if(right-left<dateHeader.h || (a.f==='port' && clean(port.text)!=='PORT' && leftRule===undefined)) continue;
+                regions[a.f]=[left/width*100,right/width*100];
+            }
+            if(!regions.ship || !regions.bl || !regions.date) continue;
+            // Require actual quantity evidence below the headers; stop before footer prose / totals.
+            const inColumn=(w,f)=>center(w)/width*100>=regions[f][0] && center(w)/width*100<regions[f][1];
+            const quantities=words.filter(w=>w.y>=top && w.y<candidateBottom && /^\d[\d.,]*$/.test(w.text) && (inColumn(w,'ship') || inColumn(w,'bl')));
+            const pairs=quantities.filter(w=>inColumn(w,'ship') && quantities.some(b=>inColumn(b,'bl') && Math.abs((b.y+b.h/2)-(w.y+w.h/2))<Math.max(b.h,w.h)));
+            if(!pairs.length)continue;
+            const bottom=Math.min(candidateBottom,Math.max(...quantities.map(w=>w.y+w.h))+dateHeader.h/2);
+            const settings={regions,options:{top:top/height*100,bottom:bottom/height*100}};
+            try{parse('',width,height,regions,settings.options);return settings;}catch{continue;}
+        }
+        return null;
+    }
+    async function detectPhotoColumns(canvas, worker) {
+        const context=canvas.getContext('2d'),pixels=context.getImageData(0,0,canvas.width,canvas.height);
+        // This is a disposable OCR copy, not the original image or the later column OCR canvas.
+        removeTableRules(pixels,{all:[0,100]});context.putImageData(pixels,0,0);
+        await worker.setParameters({tessedit_pageseg_mode:'11',preserve_interword_spaces:'1'});
+        const result=await worker.recognize(canvas,{}, {tsv:true});
+        return result.data.tsv || '';
+    }
+    const api = { quantity, date, parse, removeTableRules, recognizeColumns, tsvWords, detectPhotoTable, detectPhotoColumns };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     root.VEFPhotoImport = api;
     if (typeof document === 'undefined') return;
     let dialog, image, photoURL, worker, generation = 0, candidates = [], hooks, loading;
     let pdfTask, pdfDocument, pdfWords = [], pdfViewport, pdfCanvas, renderTask, pdfLoading;
     let sourceType = 'photo';
+    let manualMapping = false;
     const el = id => document.getElementById(id);
     function status(text) { el('photoStatus').textContent = text; }
     function invalidate() {
@@ -147,6 +218,7 @@
         el('pdfFile').value = ''; el('pdfPage').textContent = ''; el('pdfControls').hidden = true;
         if (photoURL) URL.revokeObjectURL(photoURL);
         photoURL = null; image.removeAttribute('src'); el('photoFile').value = ''; el('photoCamera').value = '';
+        image.onload=null; image.onerror=null; manualMapping=false; el('photoAdvanced').open=false;
         fields.forEach(f => ['start','end'].forEach(edge => { el('photo-' + f + '-' + edge).value = ''; }));
         el('photoBound').value = ''; el('photoTop').value = '0'; el('photoBottom').value = '100';
         el('photoRead').disabled = true;
@@ -181,7 +253,7 @@
         });
     }
     function applyDetectedTable(settings) {
-        fields.forEach(f => ['start','end'].forEach((edge,i) => { el('photo-' + f + '-' + edge).value = settings.regions[f][i].toFixed(3); }));
+        fields.forEach(f => ['start','end'].forEach((edge,i) => { el('photo-' + f + '-' + edge).value = settings.regions[f] ? settings.regions[f][i].toFixed(3) : ''; }));
         el('photoTop').value = settings.options.top.toFixed(3); el('photoBottom').value = settings.options.bottom.toFixed(3);
     }
     async function loadPDFPage(number) {
@@ -240,7 +312,8 @@
         if (!file) return;
         if (!file.type.startsWith('image/') || file.size > 20 * 1024 * 1024) { status('Choose an image of at most 20 MB. Convert HEIC to JPEG if your browser cannot display it.'); return; }
         photoURL = URL.createObjectURL(file);
-        image.onload = () => { el('photoRead').disabled = false; status('Assign the column bounds and table area, then read the photo.'); };
+        const token=generation;
+        image.onload = () => { if(token!==generation)return; el('photoRead').disabled = false; recognize(); };
         image.onerror = () => { status('This image format could not be opened. Try JPEG or PNG.'); el('photoRead').disabled = true; };
         image.src = photoURL;
     }
@@ -273,8 +346,9 @@
         invalidate(); const token = generation;
         el('photoRead').disabled = true;
         try {
-            const settings = readSettings();
-            parse('', 100, 100, settings.regions, settings.options); // validate before downloads
+            let settings = readSettings();
+            const automatic = sourceType === 'photo' && !manualMapping;
+            if(!automatic) parse('', 100, 100, settings.regions, settings.options); // validate manual / PDF settings before downloads
             if (sourceType === 'pdf' && (el('pdfMode').value === 'text' || (el('pdfMode').value === 'auto' && root.VEFPDFImport.hasTableText(pdfWords)))) {
                 const rows = root.VEFPDFImport.extract(pdfWords, pdfViewport.width, pdfViewport.height, settings);
                 rows.forEach(row => { row.source += ' — page ' + el('pdfPage').value; });
@@ -289,10 +363,6 @@
                 canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
             }
             const context=canvas.getContext('2d');
-            if (typeof context.getImageData === 'function') {
-                const pixels=context.getImageData(0,0,canvas.width,canvas.height);
-                removeTableRules(pixels,settings.regions,settings.options); context.putImageData(pixels,0,0);
-            }
             status('Downloading / starting local OCR. The photo stays in this browser.');
             const engine = await loadEngine();
             if (token !== generation) return;
@@ -304,12 +374,34 @@
             });
             if (token !== generation) { await w.terminate(); return; }
             worker = w;
+            if(automatic) {
+                status('Automatically finding the voyage table and its column headers…');
+                const pixels=context.getImageData(0,0,canvas.width,canvas.height);
+                const detectionCanvas=document.createElement('canvas');detectionCanvas.width=canvas.width;detectionCanvas.height=canvas.height;
+                detectionCanvas.getContext('2d').drawImage(canvas,0,0);
+                const headerTSV=await detectPhotoColumns(detectionCanvas,w);
+                if(token!==generation)return;
+                const detected=detectPhotoTable(headerTSV,canvas.width,canvas.height,pixels);
+                if(!detected) {
+                    el('photoAdvanced').open=true;
+                    status('Automatic table detection could not identify reliable columns. Try a clearer, upright photo including the headers, or use Advanced correction and Read selected source. No data was imported.');
+                    return;
+                }
+                settings={regions:detected.regions,options:{...settings.options,...detected.options}};
+                applyDetectedTable(settings);
+            }
+            if (typeof context.getImageData === 'function') {
+                const pixels=context.getImageData(0,0,canvas.width,canvas.height);
+                removeTableRules(pixels,settings.regions,settings.options); context.putImageData(pixels,0,0);
+            }
             await w.setParameters({ tessedit_pageseg_mode: '6', preserve_interword_spaces: '1' });
             const tsv = await recognizeColumns(canvas,settings,w,(width,height)=>{const crop=document.createElement('canvas');crop.width=width;crop.height=height;return crop;});
             if (token === generation) {
                 const rows = parse(tsv, canvas.width, canvas.height, settings.regions, settings.options);
                 rows.forEach(row => { row.source = sourceType === 'pdf' ? 'PDF OCR — page ' + el('pdfPage').value : 'Photo OCR'; });
                 render(rows);
+                if(automatic && !rows.length)el('photoAdvanced').open=true;
+                if(automatic && rows.length && typeof el('photoRows').scrollIntoView==='function')el('photoRows').scrollIntoView({block:'start'});
             }
         } catch (error) { if (token === generation) status('Source could not be read: ' + error.message); }
         finally {
@@ -330,7 +422,7 @@
             ['start','end'].forEach(edge => {
                 const td = document.createElement('td'), input = document.createElement('input');
                 input.type = 'number'; input.min = 0; input.max = 100; input.step = 0.001; input.id = 'photo-' + f + '-' + edge;
-                input.setAttribute('aria-label', labels[i] + ' ' + edge + ' percent'); input.addEventListener('input', invalidate);
+                input.setAttribute('aria-label', labels[i] + ' ' + edge + ' percent'); input.addEventListener('input', () => {manualMapping=true;invalidate();});
                 td.appendChild(input); row.appendChild(td);
             }); mapping.appendChild(row);
         });
@@ -340,6 +432,7 @@
             if (!selected) return;
             const rect = image.getBoundingClientRect();
             el(selected).value = Math.max(0, Math.min(100, (event.clientX - rect.left) / rect.width * 100)).toFixed(1);
+            manualMapping=true;
             invalidate();
             status('Column bound recorded. Check all start / end percentages before reading.');
         });
@@ -349,7 +442,9 @@
         el('pdfFile').addEventListener('change', e => selectPDF(e.target.files[0]));
         el('pdfPage').addEventListener('change', () => { if (pdfDocument) loadPDFPage(+el('pdfPage').value); });
         el('pdfMode').addEventListener('change', invalidate);
-        ['photoTop','photoBottom','photoNumbers','photoDates'].forEach(id => el(id).addEventListener('change', invalidate));
+        ['photoTop','photoBottom'].forEach(id => el(id).addEventListener('change', () => {manualMapping=true;invalidate();}));
+        ['photoNumbers','photoDates'].forEach(id => el(id).addEventListener('change', invalidate));
+        el('photoAuto').addEventListener('click', () => {manualMapping=false;el('photoAdvanced').open=false;recognize();});
         el('photoRead').addEventListener('click', recognize);
         el('photoCancel').addEventListener('click', () => { if (dialog.open && typeof dialog.close === 'function') dialog.close(); else { dialog.removeAttribute('open'); cleanup(); } });
         dialog.addEventListener('close', cleanup);

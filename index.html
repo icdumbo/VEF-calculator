@@ -302,12 +302,16 @@
         <p id="pdfControls" hidden><label>PDF page <select id="pdfPage"></select></label>
         <label>PDF recognition <select id="pdfMode"><option value="auto">Auto — digital text first, otherwise OCR</option><option value="text">Digital text only (no OCR)</option><option value="ocr">Scanned page / OCR</option></select></label> Append selected rows from each page explicitly.</p>
         <p id="photoStatus" role="status" aria-live="polite">Select Camera, Photo / Gallery or PDF. Source files are not saved with the calculation.</p>
+        <p>Photo / Camera recognition starts automatically after selection. Review the detected rows below. If the table cannot be identified, try a clearer photo with its headers or open Advanced correction.</p>
+        <img id="photoImage" alt="Selected VEF report" style="display:block;width:100%;height:auto;margin:12px 0;touch-action:pan-y">
+        <details id="photoAdvanced"><summary>Advanced correction — optional column / table bounds</summary>
         <p>Assign the left and right bounds of each available column as percentages of the photo width (0 = left edge, 100 = right edge). Leave both bounds blank for an unavailable column. Do not overlap columns. Include only the voyage table area.</p>
         <label>Tap photo to set <select id="photoBound"><option value="">Choose a column edge</option></select></label>
-        <img id="photoImage" alt="Selected VEF table for column mapping" style="display:block;width:100%;height:auto;margin:12px 0;touch-action:pan-y">
         <div style="overflow-x:auto"><table style="min-width:0;table-layout:fixed"><thead><tr><th>Column</th><th>Left (%)</th><th>Right (%)</th></tr></thead><tbody id="photoMapping"></tbody></table></div>
         <p><label>Table top (%) <input id="photoTop" type="number" min="0" max="100" value="0" step="0.001"></label>
         <label>Table bottom (%) <input id="photoBottom" type="number" min="0" max="100" value="100" step="0.001"></label></p>
+        <button id="photoAuto" type="button">Retry automatic photo detection</button>
+        </details>
         <p><label>Source number convention <select id="photoNumbers"><option value="auto">Auto — ambiguous separators left blank</option><option value="dot">Decimal dot / thousands comma</option><option value="comma">Decimal comma / thousands dot</option></select></label>
         <label>Source date convention <select id="photoDates"><option value="dmy">Day / Month / Year</option><option value="mdy">Month / Day / Year</option></select></label></p>
         <div class="buttons"><button id="photoRead" type="button" disabled>Read selected source</button><button id="photoAppend" type="button" disabled>Append selected rows for review</button><button id="photoCancel" type="button">Cancel</button></div>
