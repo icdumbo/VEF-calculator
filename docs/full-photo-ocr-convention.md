@@ -1,5 +1,7 @@
 # FULL cell OCR and automatic numeric convention — draft PR #2
 
+Historical cell OCR report. The current controlled retry and header alias results are in [the cell retry report](full-photo-cell-retries.md).
+
 Scope: only `icdumbo/VEF-calculator`, `codex/full-photo-import`, draft PR #2. Do not merge. The current geometric detector, header/column placement, horizontal row bands, local border fit, audited VEF formulas, main, BASIC Android and PDF paths are unchanged.
 
 ## Behavior

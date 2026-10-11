@@ -60,3 +60,11 @@ test('incompatible vertical rules retry semantic header boundaries instead of ab
  const s=detectPhotoTable(tsv([...headers,...data]),width,height,pixels);assert.ok(s);
  const rows=parse(tsv(data),width,height,s.regions,{...s.options,numberMode:'dot'});assert.equal(rows.length,2);assert.equal(rows[0].ship,'1001.25');assert.equal(rows[0].bl,'1000');
 });
+
+for(const label of ['B/L FIGURES','BL FIGURES','B/L QTY','SHORE FIGURES','SHORE QTY','shore figures','Shore Qty','SHOREFIGURES','BLQTY'])test('photo reference-quantity header alias: '+label,()=>{
+ const h=headers.filter(w=>!(w.x===850 && w.y<100));
+ const tokens=label.split(' ');h.push(...tokens.map((text,i)=>word(850,i?50:10,text,96,tokens.length===1?90:text.length*6)));
+ const detected=detectPhotoTable(tsv([...h,...data]),1100,250);assert.ok(detected);
+ const rows=parse(tsv(data),1100,250,detected.regions,{...detected.options,numberMode:'dot'});
+ assert.equal(rows[0].date,'2026-04-03');assert.equal(rows[0].ship,'1001.25');assert.equal(rows[0].bl,'1000');
+});

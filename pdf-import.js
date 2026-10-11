@@ -29,6 +29,12 @@
     }
     const clean = s => s.toUpperCase().replace(/[’‘]/g,"'").replace(/[^A-Z0-9/']/g,'');
     function detectTable(words,width,height) {
+        // Reference-quantity aliases only; keep the existing PDF extraction path.
+        words=words.flatMap(w=>{
+            const m=clean(w.text).match(/^(B\/L|BL|SHORE)(FIGURES|QTY)$/);
+            if(!m)return [w];const n=m[1].length+m[2].length;
+            return [{...w,text:m[1],referenceHeader:w,w:w.w*m[1].length/n},{...w,text:m[2],referenceHeader:w,x:w.x+w.w*m[1].length/n,w:w.w*m[2].length/n}];
+        });
         const dates=words.filter(w=>clean(w.text)==='DATE');
         const center=w=>w.x+w.w/2;
         const span=ws=>({x:Math.min(...ws.map(w=>w.x)),right:Math.max(...ws.map(w=>w.x+w.w)),y:Math.min(...ws.map(w=>w.y)),bottom:Math.max(...ws.map(w=>w.y+w.h))});
@@ -38,10 +44,11 @@
             const ship=band.find(w=>/^SHIP'?S?$/.test(clean(w.text)));
             const bls=band.filter(w=>['B/L','BL'].includes(clean(w.text)));
             const dateBL=bls.find(w=>Math.abs(w.y-date.y)<date.h && w.x<date.x && date.x-w.x-w.w<date.h*2);
-            const bl=bls.find(w=>w!==dateBL && ship && w.x>ship.x);
+            const bl=band.find(w=>(['B/L','BL','SHORE'].includes(clean(w.text))) && w!==dateBL && ship && w.x>ship.x);
             if(!port || !terminal || !cargo || !ship || !bl) continue;
-            const figures=band.filter(w=>clean(w.text)==='FIGURES');
-            const nearFigures=anchor=>figures.filter(w=>Math.abs(center(w)-center(anchor))<date.h*2.5);
+            const figures=band.filter(w=>['FIGURES','QTY'].includes(clean(w.text)));
+            const nearFigures=anchor=>figures.filter(w=>(anchor.referenceHeader && w.referenceHeader===anchor.referenceHeader) || Math.abs(center(w)-center(anchor))<date.h*2.5);
+            if(clean(bl.text)==='SHORE' && !nearFigures(bl).length)continue;
             const anchors={port:span([port,terminal]),date:span([date,...(dateBL?[dateBL]:[])]),cargo:span([cargo]),ship:span([ship,...nearFigures(ship)]),bl:span([bl,...nearFigures(bl)])};
             const sorted=fields.map(f=>({f,...anchors[f]})).sort((a,b)=>a.x-b.x);
             if(sorted.some((a,i)=>i && a.x<sorted[i-1].right)) continue;

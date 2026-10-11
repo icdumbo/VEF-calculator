@@ -46,3 +46,11 @@ test('column OCR preserves source coordinates and only recognizes assigned field
 test('a text-only page footer date does not misclassify a scanned table as digital',()=>{
  assert.equal(pdf.hasTableText([w('01/10/2026',20),w('Page',100),w('1',140)]),false);
 });
+
+for(const label of ['B/L FIGURES','BL FIGURES','B/L QTY','SHORE FIGURES','SHORE QTY','shore figures','Shore Qty','SHOREFIGURES','BLQTY'])test('digital PDF reference-quantity header alias: '+label,()=>{
+ const words=table().filter(z=>!(z.y<80 && ['B/L','FIGURES'].includes(z.text) && z.x>500));
+ const tokens=label.split(' ');words.push(...tokens.map((text,i)=>w(text,520,i?60:20,tokens.length===1?75:text.length*5)));
+ const detected=pdf.detectTable(words,800,200);assert.ok(detected);
+ const rows=pdf.extract(words,800,200,{...detected,options:{...detected.options,numberMode:'dot'}});
+ assert.equal(rows.length,2);assert.equal(rows[0].ship,'1001');assert.equal(rows[0].bl,'1000');assert.equal(rows[0].date,'2026-04-03');assert.equal(rows[0].qualified,undefined);
+});

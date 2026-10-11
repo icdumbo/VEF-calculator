@@ -24,7 +24,7 @@ test('cell OCR locks split fragments and empty cells to their geometric voyage; 
  const p=fixture(),bands=detectPhotoRows(p,settings);let calls=0;
  const worker={setParameters:async()=>{},recognize:async c=>{calls++;const row=Math.round((c.sourceTop-52)/20),field=Math.floor(c.sourceLeft/100);const text=['PORT','01/01/2026','OIL','1001.25','1000.25'][field];return {data:{tsv:header+(row===5&&field===1?'':field===0?word('PORT')+'\n'+word('TERMINAL',96,12,30):word(text))}};}};
  const rows=await recognizePhotoCells(makeCanvas(p.width,p.height),settings,bands,worker,makeCanvas);
- assert.equal(calls,107);assert.equal(rows.length,20);assert.equal(rows[5].date,'');assert.equal(rows[6].date,'2026-01-01');assert.equal(rows[5].port,'PORT TERMINAL');
+ assert.ok(calls>=100 && calls<=135,'Bounded retries only for the missing cell');assert.equal(rows.length,20);assert.equal(rows[5].date,'');assert.equal(rows[6].date,'2026-01-01');assert.equal(rows[5].port,'PORT TERMINAL');
  for(let i=0;i<20;i++){assert.equal(rows[i].sourceRow,i+1);assert.equal(rows[i].manualExclude,false);assert.equal(rows[i].qualified,undefined);assert.equal(rows[i].voyage,undefined);}
 });
 test('cell OCR keeps low-confidence numeric values and malformed / ambiguous quantities blank',async()=>{
@@ -84,4 +84,38 @@ test('confident isolated border punctuation is not accepted as a port suffix or 
  let field='port';const worker={setParameters:async p=>{if(p.tessedit_char_whitelist)field=p.tessedit_char_whitelist.includes('A')?'port':p.tessedit_char_whitelist.includes('-')?'date':'ship';},recognize:async()=>({data:{tsv:header+word(field==='port'?'PORT -':field==='date'?'-01/01/2026':'1001.25')}})};
  const rows=await recognizePhotoCells(makeCanvas(500,600),settings,[{top:52,bottom:68}],worker,makeCanvas);
  assert.equal(rows[0].port,'');assert.equal(rows[0].date,'');assert.equal(rows[0].ship,'1001.25');
+});
+
+test('content retry crop removes peripheral border noise but preserves separators inside its own cell',()=>{
+ const {photoCellContentBounds}=require('../photo-import.js');
+ const width=100,height=40,data=new Uint8ClampedArray(width*height*4);data.fill(255);
+ const ink=(x,y)=>{const i=(y*width+x)*4;data[i]=data[i+1]=data[i+2]=0;};
+ for(let y=0;y<height;y++)ink(1,y);
+ for(let y=10;y<30;y++)for(const x of [30,31,32,50,51,52])ink(x,y);
+ ink(42,27);ink(5,15);
+ const original={left:0,right:100,top:0,bottom:40};const b=photoCellContentBounds({width,height,data},original);
+ assert.ok(b.left>5 && b.left<=30);assert.ok(b.right>=53 && b.right<100);assert.ok(b.top>=0 && b.top<=10);assert.ok(b.bottom>=30 && b.bottom<=40);
+ assert.ok(42>=b.left && 42<b.right && 27>=b.top && 27<b.bottom,'Internal decimal/separator pixels remain in the crop');
+ const white={width,height,data:new Uint8ClampedArray(width*height*4).fill(255)};assert.deepEqual(photoCellContentBounds(white,original),original);
+});
+test('expanded retries cannot reach a neighboring column or voyage',async()=>{
+ let field='port',samples=[];
+ const worker={setParameters:async p=>{if(p.tessedit_char_whitelist)field=p.tessedit_char_whitelist.includes('A')?'port':p.tessedit_char_whitelist.includes('-')?'date':'ship';},recognize:async c=>{
+  if(field==='port' && c.sourceLeft<100)samples.push([c.sourceLeft,c.sourceTop]);
+  return {data:{tsv:header+(field==='port'?'':word(field==='date'?'01/01/2026':'1001.25'))}};
+ }};
+ const rows=await recognizePhotoCells(makeCanvas(500,600),settings,[{top:52,bottom:68},{top:72,bottom:88}],worker,makeCanvas);
+ assert.equal(rows.length,2);assert.equal(rows[0].date,'2026-01-01');assert.equal(rows[1].date,'2026-01-01');
+ assert.ok(samples.some(([x])=>x<3),'Expanded retry is actually attempted');
+ for(const [x,y] of samples){assert.ok(x>=1 && x<100);assert.ok((y>=51 && y<=68) || (y>=71 && y<=88));}
+});
+
+test('two agreeing retries do not override a contradictory confident valid reading',async()=>{
+ let field='port',n=0;
+ const worker={setParameters:async p=>{if(p.tessedit_char_whitelist)field=p.tessedit_char_whitelist.includes('A')?'port':p.tessedit_char_whitelist.includes('-')?'date':'ship';},recognize:async()=>{
+  if(field==='port'){n++;return {data:{tsv:header+word(n===1?'UNCERTAIN':n===2?'FIRST':'SECOND',n===1?50:96)}};}
+  return {data:{tsv:header+word(field==='date'?'01/01/2026':'1001.25')}};
+ }};
+ const rows=await recognizePhotoCells(makeCanvas(500,600),settings,[{top:52,bottom:68}],worker,makeCanvas);
+ assert.equal(rows[0].port,'');assert.ok(rows[0].warnings.some(w=>w.startsWith('Port')));assert.equal(rows[0].date,'2026-01-01');
 });

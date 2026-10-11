@@ -1,7 +1,9 @@
 # VEF-calculator
 Vessels VEF calculator 
 
-Current FULL Photo / Camera cell OCR and initial automatic numeric convention: [OCR / convention report](docs/full-photo-ocr-convention.md).
+Current FULL controlled cell recovery and B/L / Shore header aliases: [Cell retry report](docs/full-photo-cell-retries.md).
+
+Earlier initial automatic numeric convention: [OCR / convention report](docs/full-photo-ocr-convention.md).
 
 Earlier exact real phone photograph geometry fix: [Real camera report](docs/full-photo-real-camera.md).
 
