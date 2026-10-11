@@ -1,7 +1,9 @@
 # VEF-calculator
 Vessels VEF calculator 
 
-Current FULL controlled cell recovery and B/L / Shore header aliases: [Cell retry report](docs/full-photo-cell-retries.md).
+Current FULL Port/Terminal confidence recovery: [Port consensus report](docs/full-photo-port-confidence.md).
+
+Previous controlled cell recovery and B/L / Shore header aliases: [Cell retry report](docs/full-photo-cell-retries.md).
 
 Earlier initial automatic numeric convention: [OCR / convention report](docs/full-photo-ocr-convention.md).
 

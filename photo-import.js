@@ -324,6 +324,22 @@
         const padX=Math.ceil(h*.12),padY=Math.ceil(h*.08);
         return {left:Math.max(bounds.left,bounds.left+Math.min(...boxes.map(b=>b.minX))-padX),right:Math.min(bounds.right,bounds.left+Math.max(...boxes.map(b=>b.maxX))+1+padX),top:Math.max(bounds.top,bounds.top+Math.min(...boxes.map(b=>b.minY))-padY),bottom:Math.min(bounds.bottom,bounds.top+Math.max(...boxes.map(b=>b.maxY))+1+padY)};
     }
+    // Proper names can have one weak word even when the whole cell is stable.
+    // This fallback uses only repeated reads of this cell, never other voyages.
+    function portReadingConsensus(readings) {
+        const syntax=r=>/^[A-Z0-9](?:[A-Z0-9 /'&().-]*[A-Z0-9])?$/.test(r.raw) && /[A-Z]/.test(r.raw);
+        const score=r=>r.words.reduce((sum,w)=>sum+w.conf*w.text.length,0)/r.words.reduce((sum,w)=>sum+w.text.length,0);
+        const usable=r=>syntax(r) && r.words.length>0 && r.words.every(w=>Number.isFinite(w.conf) && w.conf>=20) && score(r)>=60;
+        const usableReadings=readings.filter(usable);
+        if(new Set(usableReadings.map(r=>r.raw)).size!==1)return null;
+        const unique=[...new Map(usableReadings.filter(r=>r.variant).map(r=>[r.variant,r])).values()];
+        const strong=unique.filter(r=>r.words.every(w=>w.conf>=40) && score(r)>=70);
+        if(strong.length<2 || new Set(unique.map(r=>r.raw)).size!==1 || unique.length<3)return null;
+        // Different crop / pixel treatments must support the result; repeated
+        // segmentation of identical pixels alone does not establish agreement.
+        if(new Set(unique.map(r=>r.treatment)).size<2)return null;
+        return strong.reduce((best,r)=>score(r)>score(best)?r:best);
+    }
     async function recognizePhotoCells(canvas, settings, rowBands, worker, makeCanvas, progress=()=>{}) {
         const rows=[],sourcePixels=canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height);
         await worker.setParameters({tessedit_pageseg_mode:'7',preserve_interword_spaces:'1'});
@@ -346,13 +362,17 @@
                     progress(i+1,rowBands.length,f);
                     // Retry margins stay inside this column and this geometric row.
                     const crop=margin==='content'?(contentCrop ||= photoCellContentBounds(sourcePixels,bounds)):margin?{left:Math.max(Math.ceil(a/100*canvas.width)+1,bounds.left-margin),right:Math.min(Math.floor(b/100*canvas.width)-1,bounds.right+margin),top:Math.max(band.top-1,bounds.top-margin),bottom:Math.min(band.bottom+1,bounds.bottom+margin)}:bounds;
-                    const result=await worker.recognize(preparePhotoCell(canvas,crop,makeCanvas,size,binary,cutoff,sharpen,!!margin,channel,stretch),{}, {tsv:true});
+                    const image=preparePhotoCell(canvas,crop,makeCanvas,size,binary,cutoff,sharpen,!!margin,channel,stretch);
+                    const treatment=JSON.stringify([crop,image.width,image.height,binary,binary?cutoff:null,sharpen,!!margin,channel,stretch]);
+                    const variant=JSON.stringify([treatment,psm,verification]);
+                    const result=await worker.recognize(image,{}, {tsv:true});
                     const words=tsvWords(result.data.tsv || '').sort((a,b)=>Math.abs(a.y-b.y)>Math.min(a.h,b.h)*.6?a.y-b.y:a.x-b.x);
-                    return {words,raw:words.map(w=>w.text).join(' ').replace(['ship','bl'].includes(f)?/\s*([.,])\s*/g:/$^/g,'$1')};
+                    return {variant,treatment,words,raw:words.map(w=>w.text).join(' ').replace(['ship','bl'].includes(f)?/\s*([.,])\s*/g:/$^/g,'$1')};
                 };
-                let {words,raw}=await read(f==='cargo'?100:60,f==='port'?false:settings.options.cellBinarize,150);
+                const primary=await read(f==='cargo'?100:60,f==='port'?false:settings.options.cellBinarize,150);
+                let {words,raw}=primary,portConsensus=false;
                 if(!reliable({words,raw})){
-                    const readings=[{words,raw}],variants=settings.options.cellBinarize?[[80,false,150],[140,false,150],[140,true,150],[100,true,170],[100,true,130],[100,false,150],[60,true,150],[160,false,150,true],[160,true,150,true],[140,true,150,false,6],[200,false,150,false,6]]:[[140,false,150],[80,false,150],[60,false,150],[160,false,150,true],[140,false,150,false,6]];
+                    const readings=[primary],variants=settings.options.cellBinarize?[[80,false,150],[140,false,150],[140,true,150],[100,true,170],[100,true,130],[100,false,150],[60,true,150],[160,false,150,true],[160,true,150,true],[140,true,150,false,6],[200,false,150,false,6]]:[[140,false,150],[80,false,150],[60,false,150],[160,false,150,true],[140,false,150,false,6]];
                     if(['ship','bl','date'].includes(f))variants.push([60,settings.options.cellBinarize,150,false,7,true],[80,settings.options.cellBinarize,150,false,7,true]);
                     variants.push([100,false,150,false,7,false,2],[80,false,150,false,7,false,2],[100,true,150,false,7,false,2],[100,true,170,false,7,false,2],[100,true,130,false,7,false,2],[100,false,150,false,6,false,2],[100,false,150,false,8,false,2]);
                     variants.push([100,false,150,false,7,false,'content','max'],[80,false,150,false,7,false,'content','max'],[100,true,150,false,7,false,'content','max'],[80,true,170,false,7,false,'content','max']);
@@ -368,8 +388,12 @@
                             words=alternative.words;raw=alternative.raw;break;
                         }
                     }
+                    if(f==='port' && !reliable({words,raw})){
+                        const agreed=portReadingConsensus(readings);
+                        if(agreed){words=agreed.words;raw=agreed.raw;portConsensus=true;row.warnings.push('Port / Terminal: accepted by concordant cell OCR; verify proper name.');}
+                    }
                 }
-                row.raw[f]=raw;row.ocrReliable[f]=reliable({words,raw});
+                row.raw[f]=raw;row.ocrReliable[f]=portConsensus || reliable({words,raw});
                 row[f]=!row.ocrReliable[f]?'':['ship','bl'].includes(f)?quantity(raw,settings.options.numberMode):f==='date'?date(raw,settings.options.dateOrder):raw;
                 if(!row[f])row.warnings.push(labels[fields.indexOf(f)]+(raw?': unreadable / ambiguous ('+raw+')':': missing'));
             }
@@ -386,7 +410,7 @@
         }
         return rows;
     }
-    const api = { quantity, date, parse, removeTableRules, recognizeColumns, tsvWords, detectPhotoTable, detectPhotoColumns, detectPhotoRows, refinePhotoCellColumns, fitPhotoCellBounds, preparePhotoCell, photoCellContentBounds, inferPhotoNumberMode, recognizePhotoCells };
+    const api = { portReadingConsensus, quantity, date, parse, removeTableRules, recognizeColumns, tsvWords, detectPhotoTable, detectPhotoColumns, detectPhotoRows, refinePhotoCellColumns, fitPhotoCellBounds, preparePhotoCell, photoCellContentBounds, inferPhotoNumberMode, recognizePhotoCells };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     root.VEFPhotoImport = api;
     if (typeof document === 'undefined') return;

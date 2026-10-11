@@ -119,3 +119,34 @@ test('two agreeing retries do not override a contradictory confident valid readi
  const rows=await recognizePhotoCells(makeCanvas(500,600),settings,[{top:52,bottom:68}],worker,makeCanvas);
  assert.equal(rows[0].port,'');assert.ok(rows[0].warnings.some(w=>w.startsWith('Port')));assert.equal(rows[0].date,'2026-01-01');
 });
+
+test('port consensus accepts stable proper names with a weak word, without a name dictionary',()=>{
+ const {portReadingConsensus}=require('../photo-import.js');
+ const read=(raw,conf,variant,treatment=variant)=>({raw,variant,treatment,words:raw.split(' ').map((text,i)=>({text,conf:conf[i]}))});
+ const stable=[read('NORTH TERMINAL',[55,88],'a'),read('NORTH TERMINAL',[45,91],'b'),read('NORTH TERMINAL',[30,90],'c')];
+ assert.equal(portReadingConsensus(stable).raw,'NORTH TERMINAL');
+ for(const r of stable){r.raw='SOUTH HARBOUR';r.words=r.raw.split(' ').map((text,i)=>({text,conf:i?90:55}));}
+ assert.equal(portReadingConsensus(stable).raw,'SOUTH HARBOUR');
+});
+test('port consensus rejects conflicts, duplicate variants, identical pixels and weak-only agreement',()=>{
+ const {portReadingConsensus}=require('../photo-import.js');
+ const r=(raw='NORTH TERMINAL',conf=[55,88],variant='a',treatment=variant)=>({raw,variant,treatment,words:raw.split(' ').map((text,i)=>({text,conf:conf[i]}))});
+ assert.equal(portReadingConsensus([r(),r(undefined,undefined,'b'),r('SOUTH TERMINAL',[55,88],'c')]),null);
+ assert.equal(portReadingConsensus([r(),r(),r()]),null);
+ assert.equal(portReadingConsensus([r('SOUTH TERMINAL'),r(),r(undefined,undefined,'b'),r(undefined,undefined,'c')]),null,'An earlier conflicting read cannot disappear when a variant key repeats');
+ assert.equal(portReadingConsensus(['a','b','c'].map(v=>r(undefined,undefined,v,'same-pixels'))),null);
+ for(const conf of [[0,99],[19,99],[39,99],[55,55]])assert.equal(portReadingConsensus(['a','b','c'].map(v=>r(undefined,conf,v))),null);
+ assert.equal(portReadingConsensus([r(),r(undefined,undefined,'b')]),null);
+ assert.equal(portReadingConsensus(['a','b','c'].map(v=>r('PORT -',[90,90],v))),null);
+});
+test('port consensus survives final reliability assignment; cargo/date/numeric rules stay strict',async()=>{
+ const fields=['port','date','cargo','ship','bl'];let field='port';
+ const worker={setParameters:async p=>{if(p.tessedit_char_whitelist)field=p.tessedit_char_whitelist.includes('A')?'text':p.tessedit_char_whitelist.includes('-')?'date':'number';},recognize:async c=>{
+  const f=fields[Math.floor(c.sourceLeft/100)];
+  return {data:{tsv:header+(f==='port'||f==='cargo'?word('NORTH',55)+'\n'+word('TERMINAL',88,40):word(f==='date'?'01/01/2026':'1001.25',84))}};
+ }};
+ const rows=await recognizePhotoCells(makeCanvas(500,600),settings,[{top:52,bottom:68}],worker,makeCanvas);
+ assert.equal(rows[0].port,'NORTH TERMINAL');assert.equal(rows[0].ocrReliable.port,true);
+ for(const f of ['cargo','date','ship','bl'])assert.equal(rows[0][f],'');
+ assert.ok(rows[0].warnings.some(w=>w.includes('concordant')));assert.equal(rows[0].sourceRow,1);
+});

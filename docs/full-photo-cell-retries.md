@@ -1,3 +1,5 @@
+Current Port-only confidence follow-up: [Port consensus report](full-photo-port-confidence.md). The thresholds and results below describe the previous commit, before that follow-up.
+
 # FULL controlled cell recovery and B/L / Shore header aliases — draft PR #2
 
 Scope: only `icdumbo/VEF-calculator`, branch `codex/full-photo-import`. Keep PR #2 draft and unmerged. No main/GitHub Pages deployment or BASIC Android edits.
