@@ -27,6 +27,7 @@ async function ocr(c,width,height) {
   const detected=parser.detectPhotoTable(tsv,width,height,pixels);assert.ok(detected,'Automatic photo table / column detection without inspector mapping');
   settings={...detected,options:{...detected.options,numberMode:process.env.VEF_NUMBER_MODE || 'dot',dateOrder:'dmy'}};
   const bands=parser.detectPhotoRows(pixels,settings);assert.ok(bands,'Verified horizontal row geometry');
+  settings=parser.refinePhotoCellColumns(pixels,settings,bands);
   return parser.recognizePhotoCells(c,settings,bands,detector,canvas.createCanvas);
  }
  const context=c.getContext('2d'),pixels=context.getImageData(0,0,width,height);

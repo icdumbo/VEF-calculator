@@ -23,3 +23,8 @@ test('white / upright / very dark photographs do not trigger unsupported perspec
  assert.equal(g.findFrame(fixture([[30,40],[370,40],[370,460],[30,460]])),null);
  blank.data.fill(0);assert.equal(g.findFrame(blank),null);
 });
+test('dark screen borders do not replace the tilted ruled table frame',()=>{
+ const p=fixture([[55,60],[365,82],[350,445],[65,455]]);
+ for(let y=0;y<p.height;y++)for(let x=0;x<p.width;x++)if(x<20 || x>p.width-20 || y<20 || y>p.height-20){const i=(y*p.width+x)*4;p.data[i]=p.data[i+1]=p.data[i+2]=0;}
+ const corners=g.findFrame(p);assert.ok(corners);for(const [x,y] of corners){assert.ok(x>30 && x<400);assert.ok(y>35 && y<480);}assert.ok(g.rectify(p,corners));
+});

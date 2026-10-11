@@ -1,7 +1,9 @@
 # VEF-calculator
 Vessels VEF calculator 
 
-Current FULL Photo / Camera geometric row alignment and cell OCR: [Cell OCR report](docs/full-photo-cell-import.md).
+Current FULL Photo / Camera fix for the exact real phone photograph: [Real camera report](docs/full-photo-real-camera.md).
+
+Earlier geometric row alignment and cell OCR: [Cell OCR report](docs/full-photo-cell-import.md).
 
 Earlier exact Android header failure reproduction and private preview: [Android photo detection fix](docs/full-photo-android-fix.md). Earlier automatic workflow: [Automatic photo import](docs/full-photo-auto-import.md).
 

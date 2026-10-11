@@ -1,5 +1,8 @@
 # FULL Photo / Camera: geometric rows and cell OCR — draft PR #2
 
+Historical report. Current exact phone-photo correction: [Real camera report](full-photo-real-camera.md).
+
+
 Current implementation is confined to `icdumbo/VEF-calculator`, `codex/full-photo-import`, draft PR #2. No merge, BASIC Android change, formula change or deployment of main/GitHub Pages. Only the existing owner-private preview is updated.
 
 ## Change and inspector flow

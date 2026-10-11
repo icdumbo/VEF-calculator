@@ -194,7 +194,7 @@
             const pairs=quantities.filter(w=>inColumn(w,'ship') && quantities.some(b=>inColumn(b,'bl') && Math.abs((b.y+b.h/2)-(w.y+w.h/2))<Math.max(b.h,w.h)));
             if(!pairs.length)continue;
             const bottom=Math.min(candidateBottom,Math.max(...quantities.map(w=>w.y+w.h))+dateHeader.h/2);
-            const settings={regions,options:{top:top/height*100,bottom:bottom/height*100},evidence:{firstY:Math.min(...pairs.map(w=>w.y+w.h/2)),lastY:Math.max(...quantities.map(w=>w.y+w.h/2)),headerBottom:top,footerTop:total?.y}};
+            const settings={regions,options:{top:top/height*100,bottom:bottom/height*100},evidence:{firstY:Math.min(...pairs.map(w=>w.y+w.h/2)),lastY:Math.max(...quantities.map(w=>w.y+w.h/2)),headerBottom:top,footerTop:total?.y},anchors};
             try{parse('',width,height,regions,settings.options);return settings;}catch{continue;}
             }
         }
@@ -238,37 +238,75 @@
         if(gaps.length>100 || median<8 || gaps.some(g=>g<median*.65 || g>median*1.45))return null;
         return selected.slice(1).map((l,i)=>({top:selected[i].end+2,bottom:l.start-2}));
     }
-    function preparePhotoCell(canvas, bounds, makeCanvas, targetHeight=60) {
+    function refinePhotoCellColumns(pixels, settings, bands) {
+        if(!settings.anchors || !bands?.length)return settings;
+        const {width,data}=pixels,from=bands[0].top,to=bands.at(-1).bottom,edges=[];let group=[];
+        let mid=0,samples=0;for(let y=from;y<to;y+=8)for(let x=0;x<width;x+=8){const i=(y*width+x)*4,v=data[i]*.299+data[i+1]*.587+data[i+2]*.114;samples++;if(v>140 && v<235)mid++;}
+        settings={...settings,options:{...settings.options,cellBinarize:mid/samples>.3}};
+        if(!settings.options.cellBinarize)return settings;
+        const flush=()=>{if(group.length)edges.push((group[0]+group.at(-1))/2);group=[];};
+        for(let x=0;x<width;x++){
+            let n=0;for(let y=from;y<to;y++){
+                let dark=false;for(let dx=-4;dx<=4;dx++){if(x+dx<0 || x+dx>=width)continue;const i=(y*width+x+dx)*4;if(data[i]*.299+data[i+1]*.587+data[i+2]*.114<150){dark=true;break;}}
+                if(dark)n++;
+            }
+            if(n/(to-from)>.75)group.push(x);else flush();
+        }flush();
+        const regions={};
+        for(const f of fields){const a=settings.anchors[f];if(!a)return settings;const center=(a.x+a.right)/2,left=edges.filter(x=>x<center).at(-1),right=edges.find(x=>x>center);if(left===undefined || right===undefined || left>a.x+5 || right<a.right-5)return settings;regions[f]=[left/width*100,right/width*100];}
+        try{parse('',width,pixels.height,regions);return {...settings,regions};}catch{return settings;}
+    }
+    function fitPhotoCellBounds(pixels,bounds) {
+        const {width,data}=pixels,out={...bounds};
+        for(const side of ['left','right']){
+            const expected=bounds[side]+(side==='left'?-3:3),groups=[];let group=[];
+            const flush=()=>{if(group.length)groups.push(group);group=[];};
+            for(let x=Math.max(0,Math.floor(expected-12));x<Math.min(width,Math.ceil(expected+12));x++){
+                let n=0;for(let y=bounds.top;y<bounds.bottom;y++){const i=(y*width+x)*4;if(data[i]*.299+data[i+1]*.587+data[i+2]*.114<150)n++;}
+                if(n/(bounds.bottom-bounds.top)>.82)group.push(x);else flush();
+            }flush();
+            const best=groups.sort((a,b)=>Math.abs((a[0]+a.at(-1))/2-expected)-Math.abs((b[0]+b.at(-1))/2-expected))[0];
+            if(best)out[side]=side==='left'?best.at(-1)+3:best[0]-3;
+        }
+        return out;
+    }
+    function preparePhotoCell(canvas, bounds, makeCanvas, targetHeight=60, binary=false, cutoff=150) {
         const {left,right,top,bottom}=bounds,w=right-left,h=bottom-top;
         const scale=Math.min(3,Math.max(1,targetHeight/h),1800/w),pad=12;
         const out=makeCanvas(Math.ceil(w*scale)+pad*2,Math.ceil(h*scale)+pad*2),ctx=out.getContext('2d');
         ctx.fillStyle='white';ctx.fillRect(0,0,out.width,out.height);
         ctx.drawImage(canvas,left,top,w,h,pad,pad,w*scale,h*scale);
         const pixels=ctx.getImageData(0,0,out.width,out.height),hist=new Uint32Array(256);
+        if(binary)removeTableRules(pixels,{cell:[0,100]});
         for(let i=0;i<pixels.data.length;i+=4){const v=Math.round(pixels.data[i]*.299+pixels.data[i+1]*.587+pixels.data[i+2]*.114);hist[v]++;}
         const count=out.width*out.height;let low=0,sum=0;for(;low<255;low++){sum+=hist[low];if(sum>=count*.01)break;}
         let high=255;sum=0;for(;high>low;high--){sum+=hist[high];if(sum>=count*.95)break;}
-        for(let i=0;i<pixels.data.length;i+=4){const gray=pixels.data[i]*.299+pixels.data[i+1]*.587+pixels.data[i+2]*.114;const v=high-low>40?Math.max(0,Math.min(255,(gray-low)*255/(high-low))):gray;pixels.data[i]=pixels.data[i+1]=pixels.data[i+2]=v;pixels.data[i+3]=255;}
+        for(let i=0;i<pixels.data.length;i+=4){const gray=pixels.data[i]*.299+pixels.data[i+1]*.587+pixels.data[i+2]*.114;const v=high-low>40?Math.max(0,Math.min(255,(gray-low)*255/(high-low))):gray;pixels.data[i]=pixels.data[i+1]=pixels.data[i+2]=binary?(v<cutoff?0:255):v;pixels.data[i+3]=255;}
         ctx.putImageData(pixels,0,0);return out;
     }
     async function recognizePhotoCells(canvas, settings, rowBands, worker, makeCanvas, progress=()=>{}) {
-        const rows=[];
+        const rows=[],sourcePixels=canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height);
         await worker.setParameters({tessedit_pageseg_mode:'7',preserve_interword_spaces:'1'});
         for(let i=0;i<rowBands.length;i++){
             const row={warnings:[],raw:{},manualExclude:false,reason:'',sourceRow:i+1};
             for(const f of fields){
                 progress(i+1,rowBands.length,f);
                 const [a,b]=settings.regions[f],band=rowBands[i];
-                const bounds={left:Math.ceil(a/100*canvas.width)+3,right:Math.floor(b/100*canvas.width)-3,top:band.top,bottom:band.bottom};
+                let bounds={left:Math.ceil(a/100*canvas.width)+3,right:Math.floor(b/100*canvas.width)-3,top:band.top,bottom:band.bottom};
+                if(settings.options.cellBinarize)bounds=fitPhotoCellBounds(sourcePixels,bounds);
                 if(bounds.right<=bounds.left || bounds.bottom<=bounds.top)throw new Error('Invalid cell geometry; use Advanced correction.');
-                const cell=preparePhotoCell(canvas,bounds,makeCanvas),result=await worker.recognize(cell,{}, {tsv:true});
+                const cell=preparePhotoCell(canvas,bounds,makeCanvas,60,settings.options.cellBinarize),result=await worker.recognize(cell,{}, {tsv:true});
                 let words=tsvWords(result.data.tsv || '').sort((a,b)=>Math.abs(a.y-b.y)>Math.min(a.h,b.h)*.6?a.y-b.y:a.x-b.x);
                 const raw=words.map(w=>w.text).join(' '),threshold=['ship','bl','date'].includes(f)?85:70;
                 if(raw && words.some(w=>w.conf<threshold)){
-                    const retry=await worker.recognize(preparePhotoCell(canvas,bounds,makeCanvas,80),{}, {tsv:true});
-                    const alternative=tsvWords(retry.data.tsv || '').sort((a,b)=>Math.abs(a.y-b.y)>Math.min(a.h,b.h)*.6?a.y-b.y:a.x-b.x);
-                    // Retry can improve confidence only on exactly agreeing text; never choose a conflicting reading.
-                    if(alternative.map(w=>w.text).join(' ')===raw && alternative.every(w=>w.conf>=threshold))words=alternative;
+                    const variants=settings.options.cellBinarize?[[80,150],[60,170],[60,130]]:[[80,150]];
+                    for(const [size,cutoff] of variants){
+                        progress(i+1,rowBands.length,f);
+                        const retry=await worker.recognize(preparePhotoCell(canvas,bounds,makeCanvas,size,settings.options.cellBinarize,cutoff),{}, {tsv:true});
+                        const alternative=tsvWords(retry.data.tsv || '').sort((a,b)=>Math.abs(a.y-b.y)>Math.min(a.h,b.h)*.6?a.y-b.y:a.x-b.x);
+                        // Only exactly agreeing text may gain confidence; conflicting readings stay blank.
+                        if(alternative.map(w=>w.text).join(' ')===raw && alternative.every(w=>w.conf>=threshold)){words=alternative;break;}
+                    }
                 }
                 row.raw[f]=raw;
                 row[f]=words.some(w=>w.conf<threshold)?'':['ship','bl'].includes(f)?quantity(raw,settings.options.numberMode):f==='date'?date(raw,settings.options.dateOrder):raw;
@@ -279,7 +317,7 @@
         }
         return rows;
     }
-    const api = { quantity, date, parse, removeTableRules, recognizeColumns, tsvWords, detectPhotoTable, detectPhotoColumns, detectPhotoRows, preparePhotoCell, recognizePhotoCells };
+    const api = { quantity, date, parse, removeTableRules, recognizeColumns, tsvWords, detectPhotoTable, detectPhotoColumns, detectPhotoRows, refinePhotoCellColumns, fitPhotoCellBounds, preparePhotoCell, recognizePhotoCells };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     root.VEFPhotoImport = api;
     if (typeof document === 'undefined') return;
@@ -485,6 +523,7 @@
                 applyDetectedTable(settings);
                 const bands=detectPhotoRows(pixels,settings);
                 if(!bands){el('photoAdvanced').open=true;status('Automatic row grid could not be verified. Use a clearer photo or Advanced correction. No data was imported.');return;}
+                settings=refinePhotoCellColumns(pixels,settings,bands);applyDetectedTable(settings);
                 const rows=await recognizePhotoCells(canvas,settings,bands,w,(width,height)=>{const c=document.createElement('canvas');c.width=width;c.height=height;return c;},(i,n,f)=>{if(token!==generation)throw new Error('Source changed.');status('Reading table cells: row '+i+' / '+n+' — '+labels[fields.indexOf(f)]);});
                 if(token===generation){rows.forEach(row=>{row.source='Photo cell OCR — geometric row '+row.sourceRow;});render(rows);status(rows.length+' table rows found. All cells stay in their geometric row. Verify, select and import; no VEF is calculated.');if(typeof el('photoRows').scrollIntoView==='function')el('photoRows').scrollIntoView({block:'start'});}
                 return;

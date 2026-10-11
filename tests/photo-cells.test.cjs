@@ -38,3 +38,17 @@ for(const agree of [true,false])test('low-confidence retry requires exact text a
  const rows=await recognizePhotoCells(makeCanvas(500,600),settings,[{top:52,bottom:68}],worker,makeCanvas);
  assert.equal(calls,6);assert.equal(rows[0].port,agree?'PORT':'');assert.equal(rows[0].raw.port,'PORT');assert.equal(rows[0].ship,'1001.25');
 });
+test('photo column refinement uses header anchors and continuous rules; Voyage column stays outside Port',()=>{
+ const {refinePhotoCellColumns}=require('../photo-import.js'),width=650,height=500,data=new Uint8ClampedArray(width*height*4);data.fill(210);
+ for(let i=3;i<data.length;i+=4)data[i]=255;
+ for(const x of [10,100,200,300,400,500,600])for(let y=40;y<470;y++){const i=(y*width+x)*4;data[i]=data[i+1]=data[i+2]=0;}
+ const fields=['port','date','cargo','ship','bl'],anchors=Object.fromEntries(fields.map((f,i)=>[f,{x:120+i*100,right:180+i*100}]));
+ const s=refinePhotoCellColumns({width,height,data},{...settings,anchors},[{top:52,bottom:68},{top:432,bottom:448}]);
+ assert.equal(s.options.cellBinarize,true);assert.equal(s.regions.port[0]*width/100,100);assert.equal(s.regions.port[1]*width/100,200);assert.equal(s.regions.bl[1]*width/100,600);
+});
+test('local cell-border fit excludes a continuous rule without following isolated text pixels',()=>{
+ const {fitPhotoCellBounds}=require('../photo-import.js'),width=100,height=70,data=new Uint8ClampedArray(width*height*4);data.fill(255);
+ for(let y=10;y<60;y++)for(const x of [19,20,21,79,80,81]){const i=(y*width+x)*4;data[i]=data[i+1]=data[i+2]=0;}
+ for(let y=25;y<35;y++){const i=(y*width+30)*4;data[i]=data[i+1]=data[i+2]=0;}
+ const b=fitPhotoCellBounds({width,height,data},{left:23,right:77,top:12,bottom:58});assert.equal(b.left,24);assert.equal(b.right,76);
+});
