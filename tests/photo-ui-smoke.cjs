@@ -19,7 +19,7 @@ function app(draft) {
  const headerWords=[[20,10,'PORT'],[70,10,'TERMINAL'],[230,10,'B/L'],[260,10,'DATE'],[460,10,'CARGO'],[660,0,"SHIP'S"],[660,30,'FIGURES'],[850,0,'B/L'],[850,30,'FIGURES'],[0,10,'VOY'],[950,10,'Qualified']];
  const dataWords=[[20,'STS'],[260,'03/04/2026'],[460,'OIL'],[660,'1001.25'],[850,'1000.00']];
  const detectionTSV=header+headerWords.map(([x,y,text])=>[5,1,1,1,1,1,x,y,text.length*5,15,96,text].join('\t')).join('\n')+'\n'+dataWords.map(([x,text])=>[5,1,1,1,1,1,x,90,text.length*7,20,96,text].join('\t')).join('\n');
- w.Tesseract={createWorker:async()=>({setParameters:async p=>{psm=p.tessedit_pageseg_mode;if(['6','7','13'].includes(psm))column=0;},recognize:async canvas=>{recognized++;if(psm==='11')return {data:{tsv:w.badHeader?header:detectionTSV}};const entry=dataWords[column++];return {data:{tsv:header+[5,1,1,1,1,1,entry[0]-(canvas.left||0),90-(canvas.top||0),entry[1].length*7,20,96,entry[1]].join('\t')}};},terminate:async()=>{terminated++;}})};
+ w.Tesseract={createWorker:async()=>({setParameters:async p=>{if(p.tessedit_pageseg_mode){if(p.tessedit_pageseg_mode==='6' || (p.tessedit_pageseg_mode!==psm && ['7','13'].includes(p.tessedit_pageseg_mode)))column=0;psm=p.tessedit_pageseg_mode;}},recognize:async canvas=>{recognized++;if(psm==='11')return {data:{tsv:w.badHeader?header:detectionTSV}};const entry=dataWords[column++];return {data:{tsv:header+[5,1,1,1,1,1,entry[0]-(canvas.left||0),90-(canvas.top||0),entry[1].length*7,20,96,entry[1]].join('\t')}};},terminate:async()=>{terminated++;}})};
  if(draft) w.localStorage.setItem('vef-calculator-current-v2',draft);
  w.eval(fs.readFileSync(path.join(__dirname,'../photo-geometry.js'),'utf8'));w.eval(importer);w.eval(script);
  return {dom,w,get terminated(){return terminated;},get recognized(){return recognized;}};
@@ -33,6 +33,8 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,20));
  const file=d.querySelector('#photoFile');Object.defineProperty(file,'files',{value:[new w.File(['x'],'photo.png',{type:'image/png'})]});file.dispatchEvent(new w.Event('change'));
  const img=d.querySelector('#photoImage');Object.defineProperties(img,{naturalWidth:{value:1000},naturalHeight:{value:150}});img.dispatchEvent(new w.Event('load'));
  await tick();
+ assert.equal(d.querySelector('#photoNumbers').value,'auto');
+ assert.match(d.querySelector('#photoStatus').textContent,/1 table rows found/);
  assert.equal(a.recognized,6);assert.equal(a.terminated,1);
  assert.equal(d.querySelector('#photoAdvanced').open,false);
  assert.ok(d.querySelector('#photo-port-start').value,'Automatically assigned columns');

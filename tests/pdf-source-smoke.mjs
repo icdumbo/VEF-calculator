@@ -25,7 +25,7 @@ async function ocr(c,width,height) {
   const detector={setParameters:p=>wrapped.setParameters(p),recognize:(...args)=>{ocrCalls++;return wrapped.recognize(...args);}};
   const tsv=await parser.detectPhotoColumns(copy,detector,canvas.createCanvas);
   const detected=parser.detectPhotoTable(tsv,width,height,pixels);assert.ok(detected,'Automatic photo table / column detection without inspector mapping');
-  settings={...detected,options:{...detected.options,numberMode:process.env.VEF_NUMBER_MODE || 'dot',dateOrder:'dmy'}};
+  settings={...detected,options:{...detected.options,numberMode:process.env.VEF_NUMBER_MODE || 'auto',dateOrder:'dmy'}};
   const bands=parser.detectPhotoRows(pixels,settings);assert.ok(bands,'Verified horizontal row geometry');
   settings=parser.refinePhotoCellColumns(pixels,settings,bands);
   return parser.recognizePhotoCells(c,settings,bands,detector,canvas.createCanvas);
@@ -60,8 +60,9 @@ try{
    rows=await ocr(c,c.width,c.height);
   }
  }
+ if(process.env.VEF_ROWS_RESULT)fs.writeFileSync(process.env.VEF_ROWS_RESULT,JSON.stringify(rows,null,2));
  const fields=['port','date','cargo','ship','bl'];
- const summary={mode,expectedRows:expected.length,recognizedRows:rows.length,fullyCorrectRows:0,correctFields:0,blankFields:0,wrongFields:0,ocrCalls,perField:Object.fromEntries(fields.map(f=>[f,{correct:0,blank:0,wrong:0}])),mismatches:[]};
+ const summary={mode,...(mode==='photo'?{numberConvention:rows.numberMode}:{}),expectedRows:expected.length,recognizedRows:rows.length,fullyCorrectRows:0,correctFields:0,blankFields:0,wrongFields:0,ocrCalls,perField:Object.fromEntries(fields.map(f=>[f,{correct:0,blank:0,wrong:0}])),mismatches:[]};
  for(let i=0;i<expected.length;i++){
   let complete=true;
   for(const f of fields){const actual=rows[i]?.[f] || '',target=expected[i][f];const equal=(f==='ship'||f==='bl')?actual!=='' && Number(actual)===Number(target):actual===target;

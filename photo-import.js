@@ -270,9 +270,9 @@
         }
         return out;
     }
-    function preparePhotoCell(canvas, bounds, makeCanvas, targetHeight=60, binary=false, cutoff=150) {
+    function preparePhotoCell(canvas, bounds, makeCanvas, targetHeight=60, binary=false, cutoff=150, sharpen=false) {
         const {left,right,top,bottom}=bounds,w=right-left,h=bottom-top;
-        const scale=Math.min(3,Math.max(1,targetHeight/h),1800/w),pad=12;
+        const scale=Math.min(4,Math.max(1,targetHeight/h),1800/w),pad=12;
         const out=makeCanvas(Math.ceil(w*scale)+pad*2,Math.ceil(h*scale)+pad*2),ctx=out.getContext('2d');
         ctx.fillStyle='white';ctx.fillRect(0,0,out.width,out.height);
         ctx.drawImage(canvas,left,top,w,h,pad,pad,w*scale,h*scale);
@@ -281,43 +281,80 @@
         for(let i=0;i<pixels.data.length;i+=4){const v=Math.round(pixels.data[i]*.299+pixels.data[i+1]*.587+pixels.data[i+2]*.114);hist[v]++;}
         const count=out.width*out.height;let low=0,sum=0;for(;low<255;low++){sum+=hist[low];if(sum>=count*.01)break;}
         let high=255;sum=0;for(;high>low;high--){sum+=hist[high];if(sum>=count*.95)break;}
-        for(let i=0;i<pixels.data.length;i+=4){const gray=pixels.data[i]*.299+pixels.data[i+1]*.587+pixels.data[i+2]*.114;const v=high-low>40?Math.max(0,Math.min(255,(gray-low)*255/(high-low))):gray;pixels.data[i]=pixels.data[i+1]=pixels.data[i+2]=binary?(v<cutoff?0:255):v;pixels.data[i+3]=255;}
+        const gray=new Float32Array(count);
+        for(let i=0,j=0;i<pixels.data.length;i+=4,j++){const v=pixels.data[i]*.299+pixels.data[i+1]*.587+pixels.data[i+2]*.114;gray[j]=high-low>40?Math.max(0,Math.min(255,(v-low)*255/(high-low))):v;}
+        for(let j=0;j<count;j++){
+            let v=gray[j];
+            if(sharpen && j>out.width && j<count-out.width && j%out.width>0 && j%out.width<out.width-1){const blur=(gray[j-1]+gray[j+1]+gray[j-out.width]+gray[j+out.width])/4;v=Math.max(0,Math.min(255,v+1.2*(v-blur)));}
+            const i=j*4;pixels.data[i]=pixels.data[i+1]=pixels.data[i+2]=binary?(v<cutoff?0:255):v;pixels.data[i+3]=255;
+        }
         ctx.putImageData(pixels,0,0);return out;
+    }
+    // Photo-only inference: use confident cells whose grouping syntax rules out
+    // the opposite convention. Repeated ambiguous 1.234 values are not evidence.
+    function inferPhotoNumberMode(rows) {
+        let dot=0,comma=0;
+        for(const row of rows)for(const f of ['ship','bl']){
+            if(!row.ocrReliable?.[f])continue;
+            const raw=row.raw[f],d=quantity(raw,'dot'),c=quantity(raw,'comma');
+            if(d && !c)dot++;if(c && !d)comma++;
+        }
+        return dot>=3 && !comma?'dot':comma>=3 && !dot?'comma':'auto';
     }
     async function recognizePhotoCells(canvas, settings, rowBands, worker, makeCanvas, progress=()=>{}) {
         const rows=[],sourcePixels=canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height);
         await worker.setParameters({tessedit_pageseg_mode:'7',preserve_interword_spaces:'1'});
         for(let i=0;i<rowBands.length;i++){
-            const row={warnings:[],raw:{},manualExclude:false,reason:'',sourceRow:i+1};
+            const row={warnings:[],raw:{},ocrReliable:{},manualExclude:false,reason:'',sourceRow:i+1};
             for(const f of fields){
                 progress(i+1,rowBands.length,f);
                 const [a,b]=settings.regions[f],band=rowBands[i];
                 let bounds={left:Math.ceil(a/100*canvas.width)+3,right:Math.floor(b/100*canvas.width)-3,top:band.top,bottom:band.bottom};
                 if(settings.options.cellBinarize)bounds=fitPhotoCellBounds(sourcePixels,bounds);
                 if(bounds.right<=bounds.left || bounds.bottom<=bounds.top)throw new Error('Invalid cell geometry; use Advanced correction.');
-                const cell=preparePhotoCell(canvas,bounds,makeCanvas,60,settings.options.cellBinarize),result=await worker.recognize(cell,{}, {tsv:true});
-                let words=tsvWords(result.data.tsv || '').sort((a,b)=>Math.abs(a.y-b.y)>Math.min(a.h,b.h)*.6?a.y-b.y:a.x-b.x);
-                const raw=words.map(w=>w.text).join(' '),threshold=['ship','bl','date'].includes(f)?85:70;
-                if(raw && words.some(w=>w.conf<threshold)){
-                    const variants=settings.options.cellBinarize?[[80,150],[60,170],[60,130]]:[[80,150]];
-                    for(const [size,cutoff] of variants){
-                        progress(i+1,rowBands.length,f);
-                        const retry=await worker.recognize(preparePhotoCell(canvas,bounds,makeCanvas,size,settings.options.cellBinarize,cutoff),{}, {tsv:true});
-                        const alternative=tsvWords(retry.data.tsv || '').sort((a,b)=>Math.abs(a.y-b.y)>Math.min(a.h,b.h)*.6?a.y-b.y:a.x-b.x);
-                        // Only exactly agreeing text may gain confidence; conflicting readings stay blank.
-                        if(alternative.map(w=>w.text).join(' ')===raw && alternative.every(w=>w.conf>=threshold)){words=alternative;break;}
+                const whitelist=f==='date'?'0123456789-/.':(['ship','bl'].includes(f)?'0123456789., ':"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 /-'&().");
+                await worker.setParameters({tessedit_char_whitelist:whitelist});
+                const threshold=['ship','bl','date'].includes(f)?85:70;
+                const valid=raw=>f==='date'?!!date(raw,settings.options.dateOrder):['ship','bl'].includes(f)?!!(quantity(raw,'dot') || quantity(raw,'comma')):/^[A-Z0-9](?:[A-Z0-9 /'&().-]*[A-Z0-9])?$/.test(raw);
+                const reliable=r=>valid(r.raw) && r.words.length>0 && r.words.every(w=>w.conf>=threshold);
+                const read=async(size,binary,cutoff,sharpen=false,psm=7,verification=false)=>{
+                    await worker.setParameters({tessedit_pageseg_mode:String(psm),tessedit_char_whitelist:verification?'':whitelist});
+                    progress(i+1,rowBands.length,f);
+                    const result=await worker.recognize(preparePhotoCell(canvas,bounds,makeCanvas,size,binary,cutoff,sharpen),{}, {tsv:true});
+                    const words=tsvWords(result.data.tsv || '').sort((a,b)=>Math.abs(a.y-b.y)>Math.min(a.h,b.h)*.6?a.y-b.y:a.x-b.x);
+                    return {words,raw:words.map(w=>w.text).join(' ').replace(['ship','bl'].includes(f)?/\s*([.,])\s*/g:/$^/g,'$1')};
+                };
+                let {words,raw}=await read(f==='cargo'?100:60,f==='port'?false:settings.options.cellBinarize,150);
+                if(!reliable({words,raw})){
+                    const readings=[{words,raw}],variants=settings.options.cellBinarize?[[80,false,150],[140,false,150],[140,true,150],[100,true,170],[100,true,130],[100,false,150],[60,true,150],[160,false,150,true],[160,true,150,true],[140,true,150,false,6],[200,false,150,false,6]]:[[140,false,150],[80,false,150],[60,false,150],[160,false,150,true],[140,false,150,false,6]];
+                    if(['ship','bl','date'].includes(f))variants.push([60,settings.options.cellBinarize,150,false,7,true],[80,settings.options.cellBinarize,150,false,7,true]);
+                    for(const [size,binary,cutoff,sharpen,psm,verification] of variants){
+                        const alternative=await read(size,binary,cutoff,sharpen,psm,verification);readings.push(alternative);
+                        // A retry may replace an uncertain first reading only if an
+                        // independent preprocessing variant agrees, without relaxing confidence.
+                        if(reliable(alternative) && readings.slice(0,-1).some(r=>r.raw===alternative.raw && reliable(r))){
+                            words=alternative.words;raw=alternative.raw;break;
+                        }
                     }
                 }
-                row.raw[f]=raw;
-                row[f]=words.some(w=>w.conf<threshold)?'':['ship','bl'].includes(f)?quantity(raw,settings.options.numberMode):f==='date'?date(raw,settings.options.dateOrder):raw;
+                row.raw[f]=raw;row.ocrReliable[f]=reliable({words,raw});
+                row[f]=!row.ocrReliable[f]?'':['ship','bl'].includes(f)?quantity(raw,settings.options.numberMode):f==='date'?date(raw,settings.options.dateOrder):raw;
                 if(!row[f])row.warnings.push(labels[fields.indexOf(f)]+(raw?': unreadable / ambiguous ('+raw+')':': missing'));
             }
             // A blank cell, or extra OCR fragment, cannot create, delete or shift a geometric row.
             rows.push(row);
         }
+        rows.numberMode=settings.options.numberMode || 'auto';
+        if(rows.numberMode==='auto'){
+            rows.numberMode=inferPhotoNumberMode(rows);
+            if(rows.numberMode!=='auto')for(const row of rows)for(const f of ['ship','bl']){
+                row[f]=row.ocrReliable[f]?quantity(row.raw[f],rows.numberMode):'';
+                if(row[f])row.warnings=row.warnings.filter(w=>!w.startsWith(labels[fields.indexOf(f)]+':'));
+            }
+        }
         return rows;
     }
-    const api = { quantity, date, parse, removeTableRules, recognizeColumns, tsvWords, detectPhotoTable, detectPhotoColumns, detectPhotoRows, refinePhotoCellColumns, fitPhotoCellBounds, preparePhotoCell, recognizePhotoCells };
+    const api = { quantity, date, parse, removeTableRules, recognizeColumns, tsvWords, detectPhotoTable, detectPhotoColumns, detectPhotoRows, refinePhotoCellColumns, fitPhotoCellBounds, preparePhotoCell, inferPhotoNumberMode, recognizePhotoCells };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     root.VEFPhotoImport = api;
     if (typeof document === 'undefined') return;
@@ -436,6 +473,7 @@
         cleanup();
         if (!file) return;
         if (!file.type.startsWith('image/') || file.size > 20 * 1024 * 1024) { status('Choose an image of at most 20 MB. Convert HEIC to JPEG if your browser cannot display it.'); return; }
+        el('photoNumbers').value='auto';
         photoURL = URL.createObjectURL(file);
         const token=generation;
         image.onload = () => { if(token!==generation)return; el('photoRead').disabled = false; recognize(); };
@@ -525,7 +563,7 @@
                 if(!bands){el('photoAdvanced').open=true;status('Automatic row grid could not be verified. Use a clearer photo or Advanced correction. No data was imported.');return;}
                 settings=refinePhotoCellColumns(pixels,settings,bands);applyDetectedTable(settings);
                 const rows=await recognizePhotoCells(canvas,settings,bands,w,(width,height)=>{const c=document.createElement('canvas');c.width=width;c.height=height;return c;},(i,n,f)=>{if(token!==generation)throw new Error('Source changed.');status('Reading table cells: row '+i+' / '+n+' — '+labels[fields.indexOf(f)]);});
-                if(token===generation){rows.forEach(row=>{row.source='Photo cell OCR — geometric row '+row.sourceRow;});render(rows);status(rows.length+' table rows found. All cells stay in their geometric row. Verify, select and import; no VEF is calculated.');if(typeof el('photoRows').scrollIntoView==='function')el('photoRows').scrollIntoView({block:'start'});}
+                if(token===generation){if(settings.options.numberMode==='auto' && rows.numberMode!=='auto')el('photoNumbers').value=rows.numberMode;rows.forEach(row=>{row.source='Photo cell OCR — geometric row '+row.sourceRow;});render(rows);status(rows.length+' table rows found. '+(rows.numberMode==='dot'?'Decimal dot / thousands comma. ':rows.numberMode==='comma'?'Decimal comma / thousands dot. ':'Numeric convention uncertain; use the selector to correct it. ')+'All cells stay in their geometric row. Verify, select and import; no VEF is calculated.');if(typeof el('photoRows').scrollIntoView==='function')el('photoRows').scrollIntoView({block:'start'});}
                 return;
             }
             if (typeof context.getImageData === 'function') {

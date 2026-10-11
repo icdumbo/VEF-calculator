@@ -1,7 +1,9 @@
 # VEF-calculator
 Vessels VEF calculator 
 
-Current FULL Photo / Camera fix for the exact real phone photograph: [Real camera report](docs/full-photo-real-camera.md).
+Current FULL Photo / Camera cell OCR and initial automatic numeric convention: [OCR / convention report](docs/full-photo-ocr-convention.md).
+
+Earlier exact real phone photograph geometry fix: [Real camera report](docs/full-photo-real-camera.md).
 
 Earlier geometric row alignment and cell OCR: [Cell OCR report](docs/full-photo-cell-import.md).
 

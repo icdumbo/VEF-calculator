@@ -1,5 +1,7 @@
 # FULL Photo / Camera: exact photographed-screen failure — draft PR #2
 
+Historical geometry report. The current cell OCR and initial Auto-convention results are in [the OCR / convention report](full-photo-ocr-convention.md).
+
 Work is confined to `icdumbo/VEF-calculator`, `codex/full-photo-import`, draft PR #2. No merge, main/GitHub Pages deployment, BASIC Android change, PDF import change or audited formula change. Only the existing owner-private preview is updated.
 
 ## Reproduction and correction
