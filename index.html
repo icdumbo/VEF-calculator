@@ -280,6 +280,7 @@
         <button class="add" onclick="newCalculation()">New Calculation</button>
         <button class="add" onclick="addRow()">+ Add Voyage</button>
         <button class="add" onclick="VEFPhotoImport.open()">Import from Photo</button>
+        <button class="add" onclick="VEFPhotoImport.open('pdf')">Import PDF</button>
         <button class="calculate" onclick="calculateVEF(true)">Calculate VEF</button>
         <button class="clear" onclick="clearAll()">Clear Current</button>
         <button class="export" onclick="openReportDialog()">Generate VEF Report</button>
@@ -293,20 +294,23 @@
     </section>
 
     <dialog id="photoDialog" style="width:min(960px,94vw);max-height:90vh;overflow:auto">
-        <h2>Import VEF from Photo</h2>
-        <p>Local OCR (Tesseract.js). Your photo stays in this browser. Internet is required to download the OCR engine and English model. Use a clear, upright photo with one voyage per horizontal line.</p>
-        <p><label>Choose photo <input id="photoFile" type="file" accept="image/*"></label>
-        <label>Take photo <input id="photoCamera" type="file" accept="image/*" capture="environment"></label></p>
-        <p id="photoStatus" role="status" aria-live="polite">Select a clear, upright photo. No photograph is saved with the calculation.</p>
+        <h2>Import VEF from Camera / Photo / PDF</h2>
+        <p>Files are processed locally in this browser. PDF text is extracted directly where usable; scanned pages and photos use Tesseract OCR. Internet is required to download PDF / OCR assets. Use clear, upright tables with one voyage per horizontal line.</p>
+        <p><label>Photo / Gallery <input id="photoFile" type="file" accept="image/*"></label>
+        <label>Camera / Take Photo <input id="photoCamera" type="file" accept="image/*" capture="environment"></label>
+        <label>PDF <input id="pdfFile" type="file" accept="application/pdf,.pdf"></label></p>
+        <p id="pdfControls" hidden><label>PDF page <select id="pdfPage"></select></label>
+        <label>PDF recognition <select id="pdfMode"><option value="auto">Auto — digital text first, otherwise OCR</option><option value="text">Digital text only (no OCR)</option><option value="ocr">Scanned page / OCR</option></select></label> Append selected rows from each page explicitly.</p>
+        <p id="photoStatus" role="status" aria-live="polite">Select Camera, Photo / Gallery or PDF. Source files are not saved with the calculation.</p>
         <p>Assign the left and right bounds of each available column as percentages of the photo width (0 = left edge, 100 = right edge). Leave both bounds blank for an unavailable column. Do not overlap columns. Include only the voyage table area.</p>
         <label>Tap photo to set <select id="photoBound"><option value="">Choose a column edge</option></select></label>
         <img id="photoImage" alt="Selected VEF table for column mapping" style="display:block;width:100%;height:auto;margin:12px 0;touch-action:pan-y">
-        <div style="overflow-x:auto"><table><thead><tr><th>Column</th><th>Left (%)</th><th>Right (%)</th></tr></thead><tbody id="photoMapping"></tbody></table></div>
-        <p><label>Table top (%) <input id="photoTop" type="number" min="0" max="100" value="0" step="0.1"></label>
-        <label>Table bottom (%) <input id="photoBottom" type="number" min="0" max="100" value="100" step="0.1"></label></p>
-        <p><label>Photo number convention <select id="photoNumbers"><option value="auto">Auto — ambiguous separators left blank</option><option value="dot">Decimal dot / thousands comma</option><option value="comma">Decimal comma / thousands dot</option></select></label>
-        <label>Photo date convention <select id="photoDates"><option value="dmy">Day / Month / Year</option><option value="mdy">Month / Day / Year</option></select></label></p>
-        <div class="buttons"><button id="photoRead" type="button" disabled>Read Photo</button><button id="photoAppend" type="button" disabled>Append selected rows for review</button><button id="photoCancel" type="button">Cancel</button></div>
+        <div style="overflow-x:auto"><table style="min-width:0;table-layout:fixed"><thead><tr><th>Column</th><th>Left (%)</th><th>Right (%)</th></tr></thead><tbody id="photoMapping"></tbody></table></div>
+        <p><label>Table top (%) <input id="photoTop" type="number" min="0" max="100" value="0" step="0.001"></label>
+        <label>Table bottom (%) <input id="photoBottom" type="number" min="0" max="100" value="100" step="0.001"></label></p>
+        <p><label>Source number convention <select id="photoNumbers"><option value="auto">Auto — ambiguous separators left blank</option><option value="dot">Decimal dot / thousands comma</option><option value="comma">Decimal comma / thousands dot</option></select></label>
+        <label>Source date convention <select id="photoDates"><option value="dmy">Day / Month / Year</option><option value="mdy">Month / Day / Year</option></select></label></p>
+        <div class="buttons"><button id="photoRead" type="button" disabled>Read selected source</button><button id="photoAppend" type="button" disabled>Append selected rows for review</button><button id="photoCancel" type="button">Cancel</button></div>
         <p>Verify column assignments, date / number conventions and every recognized value. Confidence scores are not a guarantee of correctness. Select only voyage rows; skip headers and totals. All imported rows remain editable. Manual Exclude is never selected by import.</p>
         <div style="overflow-x:auto"><table id="photoRows"></table></div>
     </dialog>
@@ -374,6 +378,7 @@
 </div>
 
 <script src="photo-import.js"></script>
+<script src="pdf-import.js"></script>
 <script>
 
 let rowNumber = 0;
@@ -429,7 +434,7 @@ function calculationSummary(state) {
     return {
         vef: document.getElementById("finalVEF").textContent,
         voyageCount: filled.length,
-        status: photoReviewPending ? "Photo review required" : document.getElementById("finalVEF").textContent !== "-" ? "Calculated" : "Draft"
+        status: photoReviewPending ? "Import review required" : document.getElementById("finalVEF").textContent !== "-" ? "Calculated" : "Draft"
     };
 }
 
@@ -547,7 +552,7 @@ function exportHistoryCalculation(id) {
     if (item.data?.photoReviewPending) {
         const validation = document.getElementById("validationSummary");
         validation.className = "validation-summary has-warnings";
-        validation.textContent = "Open this saved calculation, verify its photo rows and press Calculate VEF before exporting.";
+        validation.textContent = "Open this saved calculation, verify its imported rows and press Calculate VEF before exporting.";
         return;
     }
     pendingHistoryExport = { id: currentCalculationId, data: collectCalculationState() };
@@ -627,13 +632,13 @@ function suspendPhotoCalculation() {
         row.querySelector(".qualified").className = "qualified";
         row.classList.remove("row-incomplete");
         [".ship", ".bl", ".reason"].forEach(selector => row.querySelector(selector).classList.remove("invalid-input"));
-        row.querySelector(".row-status").textContent = "Photo review required: verify values, then Calculate VEF";
+        row.querySelector(".row-status").textContent = "Import review required: verify values, then Calculate VEF";
     });
     ["totalShip", "totalBL", "averageRatio", "lowerRange", "upperRange", "outsideRange", "finalVEF"].forEach(id => document.getElementById(id).textContent = "-");
     document.getElementById("qualifiedCount").textContent = "0";
     const validation = document.getElementById("validationSummary");
     validation.className = "validation-summary has-warnings";
-    validation.textContent = "Photo rows imported. Verify and correct every value; choose any manual exclusions yourself. Press Calculate VEF when ready. Calculation and reports are suspended until then.";
+    validation.textContent = "Source rows imported. Verify and correct every value; choose any manual exclusions yourself. Press Calculate VEF when ready. Calculation and reports are suspended until then.";
 }
 
 function appendPhotoRows(rows) {
@@ -644,7 +649,7 @@ function appendPhotoRows(rows) {
         ["port", "date", "cargo", "ship", "bl"].forEach(field => {
             const input = row.querySelector("." + field);
             input.value = voyage[field] || "";
-            input.title = "Imported from photo — verify against original. OCR: " + (voyage.raw?.[field] || "(unreadable / missing)");
+            input.title = "Imported source — verify against original. Text / OCR: " + (voyage.raw?.[field] || "(unreadable / missing)");
         });
         row.querySelector(".manual-exclude").checked = false;
         row.querySelector(".reason").value = "";
@@ -654,7 +659,7 @@ function appendPhotoRows(rows) {
 }
 
 function requirePhotoReview() {
-    if (photoReviewPending) throw new Error("Verify imported photo rows and press Calculate VEF before exporting.");
+    if (photoReviewPending) throw new Error("Verify imported rows and press Calculate VEF before exporting.");
 }
 
 function calculateVEF(showValidation = false) {

@@ -89,26 +89,68 @@
             return row;
         }).filter(row => fields.some(f => row.raw[f]));
     }
-    const api = { quantity, date, parse };
+    function removeTableRules(data, regions, options = {}) {
+        const {width,height} = data, pixels = data.data;
+        const ranges = Object.values(regions);
+        if (!ranges.length) return {rows:0,columns:0};
+        const left=Math.max(0,Math.floor(Math.min(...ranges.map(r=>r[0]))/100*width));
+        const right=Math.min(width,Math.ceil(Math.max(...ranges.map(r=>r[1]))/100*width));
+        const top=Math.max(0,Math.floor((options.top ?? 0)/100*height)), bottom=Math.min(height,Math.ceil((options.bottom ?? 100)/100*height));
+        if (right<=left || bottom<=top) return {rows:0,columns:0};
+        const dark=(x,y)=>{const i=(y*width+x)*4;return pixels[i]<110 && pixels[i+1]<110 && pixels[i+2]<110;};
+        const horizontal=[],vertical=[];
+        for(let y=top;y<bottom;y++){let count=0;for(let x=left;x<right;x++)if(dark(x,y))count++;if(count/(right-left)>0.65)horizontal.push(y);}
+        for(let x=left;x<right;x++){let count=0;for(let y=top;y<bottom;y++)if(dark(x,y))count++;if(count/(bottom-top)>0.75)vertical.push(x);}
+        const white=(x,y)=>{const i=(y*width+x)*4;pixels[i]=pixels[i+1]=pixels[i+2]=pixels[i+3]=255;};
+        // Only long, continuous table rules; never substitute recognized characters.
+        for(const y of horizontal)for(let dy=-1;dy<=1;dy++)if(y+dy>=top && y+dy<bottom)for(let x=left;x<right;x++)white(x,y+dy);
+        for(const x of vertical)for(let dx=-1;dx<=1;dx++)if(x+dx>=left && x+dx<right)for(let y=top;y<bottom;y++)white(x+dx,y);
+        return {rows:horizontal.length,columns:vertical.length};
+    }
+    async function recognizeColumns(canvas, settings, worker, makeCanvas) {
+        const lines=['level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext'];
+        const top=Math.max(0,Math.floor((settings.options.top ?? 0)/100*canvas.height));
+        const bottom=Math.min(canvas.height,Math.ceil((settings.options.bottom ?? 100)/100*canvas.height));
+        for(const field of fields.filter(f=>settings.regions[f])) {
+            const bounds=settings.regions[field];
+            const left=Math.max(0,Math.floor(bounds[0]/100*canvas.width)),right=Math.min(canvas.width,Math.ceil(bounds[1]/100*canvas.width));
+            const crop=makeCanvas(right-left,bottom-top);
+            crop.getContext('2d').drawImage(canvas,left,top,right-left,bottom-top,0,0,crop.width,crop.height);
+            const result=await worker.recognize(crop,{}, {tsv:true});
+            for(const line of (result.data.tsv || '').split(/\r?\n/).slice(1)) {
+                const p=line.split('\t'); if(+p[0]!==5 || p.length<12)continue;
+                p[6]=String(+p[6]+left);p[7]=String(+p[7]+top);lines.push(p.join('\t'));
+            }
+        }
+        return lines.join('\n');
+    }
+    const api = { quantity, date, parse, removeTableRules, recognizeColumns };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     root.VEFPhotoImport = api;
     if (typeof document === 'undefined') return;
     let dialog, image, photoURL, worker, generation = 0, candidates = [], hooks, loading;
+    let pdfTask, pdfDocument, pdfWords = [], pdfViewport, pdfCanvas, renderTask, pdfLoading;
+    let sourceType = 'photo';
     const el = id => document.getElementById(id);
     function status(text) { el('photoStatus').textContent = text; }
     function invalidate() {
         generation++; candidates = []; el('photoRows').textContent = ''; el('photoAppend').disabled = true;
-        stop().catch(() => {}); el('photoRead').disabled = !photoURL;
+        stop().catch(() => {});
+        if (renderTask) { renderTask.cancel(); renderTask = null; }
+        el('photoRead').disabled = sourceType === 'pdf' ? !pdfCanvas : !photoURL;
     }
     async function stop() { const w = worker; worker = null; if (w) await w.terminate(); }
     function cleanup() {
         invalidate(); stop().catch(() => {});
+        if (pdfTask) pdfTask.destroy().catch(() => {});
+        pdfTask = null; pdfDocument = null; pdfWords = []; pdfViewport = null; pdfCanvas = null; sourceType = 'photo';
+        el('pdfFile').value = ''; el('pdfPage').textContent = ''; el('pdfControls').hidden = true;
         if (photoURL) URL.revokeObjectURL(photoURL);
         photoURL = null; image.removeAttribute('src'); el('photoFile').value = ''; el('photoCamera').value = '';
         fields.forEach(f => ['start','end'].forEach(edge => { el('photo-' + f + '-' + edge).value = ''; }));
         el('photoBound').value = ''; el('photoTop').value = '0'; el('photoBottom').value = '100';
         el('photoRead').disabled = true;
-        status('Select a clear, upright photo. No photograph is saved with the calculation.');
+        status('Select Camera, Photo / Gallery or PDF. Source files are not saved with the calculation.');
     }
     function loadEngine() {
         if (root.Tesseract) return Promise.resolve(root.Tesseract);
@@ -121,6 +163,77 @@
             document.head.appendChild(script);
         });
         return loading;
+    }
+    function loadPDFEngine() {
+        if (root.pdfjsLib) return Promise.resolve(root.pdfjsLib);
+        if (pdfLoading) return pdfLoading;
+        pdfLoading = import('https://cdn.jsdelivr.net/npm/pdfjs-dist@5.6.205/legacy/build/pdf.min.mjs').then(lib => {
+            lib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@5.6.205/legacy/build/pdf.worker.min.mjs';
+            return lib;
+        }).catch(error => { pdfLoading = null; throw new Error('Cannot load PDF reader. Check your internet connection. ' + error.message); });
+        return pdfLoading;
+    }
+    function fileBytes(file) {
+        if (typeof file.arrayBuffer === 'function') return file.arrayBuffer();
+        return new Promise((resolve,reject) => {
+            const reader = new FileReader(); reader.onload = () => resolve(reader.result);
+            reader.onerror = () => reject(new Error('Cannot read the selected PDF.')); reader.readAsArrayBuffer(file);
+        });
+    }
+    function applyDetectedTable(settings) {
+        fields.forEach(f => ['start','end'].forEach((edge,i) => { el('photo-' + f + '-' + edge).value = settings.regions[f][i].toFixed(3); }));
+        el('photoTop').value = settings.options.top.toFixed(3); el('photoBottom').value = settings.options.bottom.toFixed(3);
+    }
+    async function loadPDFPage(number) {
+        invalidate(); const token = generation; el('photoRead').disabled = true; pdfCanvas = null;
+        fields.forEach(f => ['start','end'].forEach(edge => { el('photo-' + f + '-' + edge).value = ''; }));
+        el('photoTop').value = '0'; el('photoBottom').value = '100';
+        try {
+            const page = await pdfDocument.getPage(number);
+            const viewport = page.getViewport({scale:1});
+            const text = await page.getTextContent();
+            if (token !== generation) return;
+            pdfWords = root.VEFPDFImport.textWords(text.items, viewport); pdfViewport = viewport;
+            const detected = root.VEFPDFImport.detectTable(pdfWords, viewport.width, viewport.height);
+            if (detected) applyDetectedTable(detected);
+            const scaled = page.getViewport({scale:Math.min(3,3000 / Math.max(viewport.width,viewport.height))});
+            const canvas = document.createElement('canvas'); canvas.width = Math.ceil(scaled.width); canvas.height = Math.ceil(scaled.height);
+            const task = page.render({canvasContext:canvas.getContext('2d'),viewport:scaled}); renderTask = task;
+            await task.promise;
+            if (token !== generation) return;
+            renderTask = null; pdfCanvas = canvas;
+            const blob = await new Promise(resolve => canvas.toBlob(resolve,'image/png'));
+            if (token !== generation) return;
+            if (!blob) throw new Error('Cannot preview this PDF page.');
+            if (photoURL) URL.revokeObjectURL(photoURL);
+            photoURL = URL.createObjectURL(blob); image.onload = null; image.onerror = null; image.src = photoURL;
+            el('photoRead').disabled = false;
+            status('PDF page ' + number + '/' + pdfDocument.numPages + ': ' + (root.VEFPDFImport.hasTableText(pdfWords)
+                ? 'selectable table text found; Auto will extract it directly, without OCR. ' : 'no usable table text detected; Auto will use local OCR. ')
+                + (detected ? 'Column bounds detected; verify them and number / date conventions before reading.' : 'Assign the column bounds on this page before reading.'));
+        } catch (error) { if (token === generation) status('PDF page could not be opened: ' + error.message); }
+    }
+    async function selectPDF(file) {
+        cleanup(); if (!file) return;
+        if ((!/\.pdf$/i.test(file.name) && file.type !== 'application/pdf') || file.size > 20 * 1024 * 1024) { status('Choose a PDF of at most 20 MB.'); return; }
+        sourceType = 'pdf'; const token = generation;
+        status('Opening PDF locally. Downloading the PDF reader if needed.');
+        try {
+            const engine = await loadPDFEngine(), bytes = await fileBytes(file);
+            if (token !== generation) return;
+            const task = engine.getDocument({data:new Uint8Array(bytes),isEvalSupported:false,
+                cMapUrl:'https://cdn.jsdelivr.net/npm/pdfjs-dist@5.6.205/cmaps/',cMapPacked:true,
+                standardFontDataUrl:'https://cdn.jsdelivr.net/npm/pdfjs-dist@5.6.205/standard_fonts/',
+                wasmUrl:'https://cdn.jsdelivr.net/npm/pdfjs-dist@5.6.205/wasm/'});
+            pdfTask = task;
+            const doc = await task.promise;
+            if (token !== generation) { await task.destroy(); return; }
+            pdfDocument = doc;
+            if (doc.numPages > 30) { await task.destroy(); pdfTask = null; pdfDocument = null; throw new Error('Limit: 30 pages. Select a smaller PDF.'); }
+            for (let n=1; n<=doc.numPages; n++) { const opt = document.createElement('option'); opt.value = n; opt.textContent = 'Page ' + n; el('pdfPage').appendChild(opt); }
+            el('pdfControls').hidden = false;
+            await loadPDFPage(1);
+        } catch (error) { if (token === generation) status('PDF could not be opened: ' + error.message + ' Password-protected or damaged files may need an unlocked copy.'); }
     }
     async function selectFile(file) {
         cleanup();
@@ -143,7 +256,7 @@
         candidates = rows;
         const table = el('photoRows'); table.textContent = '';
         const header = document.createElement('tr');
-        ['Import?', ...labels, 'Review notes'].forEach(text => { const th = document.createElement('th'); th.textContent = text; header.appendChild(th); });
+        ['Import?', ...labels, 'Source / Review notes'].forEach(text => { const th = document.createElement('th'); th.textContent = text; header.appendChild(th); });
         table.appendChild(header);
         rows.forEach((row, i) => {
             const tr = document.createElement('tr'), td = document.createElement('td'), checkbox = document.createElement('input');
@@ -152,7 +265,7 @@
             checkbox.addEventListener('change', () => { el('photoAppend').disabled = !table.querySelector('input:checked'); });
             td.appendChild(checkbox); tr.appendChild(td);
             fields.forEach(f => { const cell = document.createElement('td'); cell.textContent = row[f] || '—'; cell.title = 'OCR: ' + (row.raw[f] || '(missing)'); tr.appendChild(cell); });
-            const notes = document.createElement('td'); notes.textContent = ['Verify every value against the photo.', ...row.warnings].join(' '); tr.appendChild(notes); table.appendChild(tr);
+            const notes = document.createElement('td'); notes.textContent = [row.source || 'Photo OCR', 'Verify every value against the original.', ...row.warnings].join(' '); tr.appendChild(notes); table.appendChild(tr);
         });
         status(rows.length ? `${rows.length} possible rows found. Select only voyage rows (skip headers / totals). Blank cells must be completed in the main table. No VEF will be calculated on import.` : 'No rows found in the assigned area. Adjust the photo / column bounds and retry.');
     }
@@ -162,10 +275,24 @@
         try {
             const settings = readSettings();
             parse('', 100, 100, settings.regions, settings.options); // validate before downloads
+            if (sourceType === 'pdf' && (el('pdfMode').value === 'text' || (el('pdfMode').value === 'auto' && root.VEFPDFImport.hasTableText(pdfWords)))) {
+                const rows = root.VEFPDFImport.extract(pdfWords, pdfViewport.width, pdfViewport.height, settings);
+                rows.forEach(row => { row.source += ' — page ' + el('pdfPage').value; });
+                render(rows); return;
+            }
             const canvas = document.createElement('canvas');
             const scale = Math.min(1, 3000 / Math.max(image.naturalWidth, image.naturalHeight));
-            canvas.width = Math.round(image.naturalWidth * scale); canvas.height = Math.round(image.naturalHeight * scale);
-            canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+            if (sourceType === 'pdf') {
+                canvas.width=pdfCanvas.width; canvas.height=pdfCanvas.height; canvas.getContext('2d').drawImage(pdfCanvas,0,0);
+            } else {
+                canvas.width = Math.round(image.naturalWidth * scale); canvas.height = Math.round(image.naturalHeight * scale);
+                canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+            }
+            const context=canvas.getContext('2d');
+            if (typeof context.getImageData === 'function') {
+                const pixels=context.getImageData(0,0,canvas.width,canvas.height);
+                removeTableRules(pixels,settings.regions,settings.options); context.putImageData(pixels,0,0);
+            }
             status('Downloading / starting local OCR. The photo stays in this browser.');
             const engine = await loadEngine();
             if (token !== generation) return;
@@ -178,14 +305,22 @@
             if (token !== generation) { await w.terminate(); return; }
             worker = w;
             await w.setParameters({ tessedit_pageseg_mode: '6', preserve_interword_spaces: '1' });
-            const result = await w.recognize(canvas, {}, { tsv: true });
-            if (token === generation) render(parse(result.data.tsv || '', canvas.width, canvas.height, settings.regions, settings.options));
-        } catch (error) { if (token === generation) status('Photo could not be read: ' + error.message); }
+            const tsv = await recognizeColumns(canvas,settings,w,(width,height)=>{const crop=document.createElement('canvas');crop.width=width;crop.height=height;return crop;});
+            if (token === generation) {
+                const rows = parse(tsv, canvas.width, canvas.height, settings.regions, settings.options);
+                rows.forEach(row => { row.source = sourceType === 'pdf' ? 'PDF OCR — page ' + el('pdfPage').value : 'Photo OCR'; });
+                render(rows);
+            }
+        } catch (error) { if (token === generation) status('Source could not be read: ' + error.message); }
         finally {
             if (token === generation) { await stop().catch(() => {}); el('photoRead').disabled = !photoURL; }
         }
     }
-    api.open = () => { if (typeof dialog.showModal === 'function') dialog.showModal(); else { dialog.setAttribute('open',''); dialog.scrollIntoView(); } };
+    api.open = source => {
+        if (typeof dialog.showModal === 'function') dialog.showModal();
+        else { dialog.setAttribute('open',''); dialog.scrollIntoView(); }
+        if (source === 'pdf') el('pdfFile').focus();
+    };
     api.init = callbacks => {
         hooks = callbacks; dialog = el('photoDialog'); image = el('photoImage');
         const mapping = el('photoMapping');
@@ -194,7 +329,7 @@
             const label = document.createElement('th'); label.textContent = labels[i]; row.appendChild(label);
             ['start','end'].forEach(edge => {
                 const td = document.createElement('td'), input = document.createElement('input');
-                input.type = 'number'; input.min = 0; input.max = 100; input.step = 0.1; input.id = 'photo-' + f + '-' + edge;
+                input.type = 'number'; input.min = 0; input.max = 100; input.step = 0.001; input.id = 'photo-' + f + '-' + edge;
                 input.setAttribute('aria-label', labels[i] + ' ' + edge + ' percent'); input.addEventListener('input', invalidate);
                 td.appendChild(input); row.appendChild(td);
             }); mapping.appendChild(row);
@@ -211,6 +346,9 @@
         fields.forEach((f,i) => ['start','end'].forEach(edge => { const opt = document.createElement('option'); opt.value = 'photo-' + f + '-' + edge; opt.textContent = labels[i] + ' ' + edge; el('photoBound').appendChild(opt); }));
         el('photoFile').addEventListener('change', e => selectFile(e.target.files[0]));
         el('photoCamera').addEventListener('change', e => selectFile(e.target.files[0]));
+        el('pdfFile').addEventListener('change', e => selectPDF(e.target.files[0]));
+        el('pdfPage').addEventListener('change', () => { if (pdfDocument) loadPDFPage(+el('pdfPage').value); });
+        el('pdfMode').addEventListener('change', invalidate);
         ['photoTop','photoBottom','photoNumbers','photoDates'].forEach(id => el(id).addEventListener('change', invalidate));
         el('photoRead').addEventListener('click', recognize);
         el('photoCancel').addEventListener('click', () => { if (dialog.open && typeof dialog.close === 'function') dialog.close(); else { dialog.removeAttribute('open'); cleanup(); } });

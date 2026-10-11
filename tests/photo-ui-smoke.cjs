@@ -15,7 +15,7 @@ function app(draft) {
  w.HTMLDialogElement.prototype.showModal=function(){this.open=true;};
  w.HTMLDialogElement.prototype.close=function(){this.open=false;this.dispatchEvent(new w.Event('close'));};
  let terminated=0,recognized=0;
- w.Tesseract={createWorker:async()=>({setParameters:async()=>{},recognize:async()=>{recognized++;return {data:{tsv}};},terminate:async()=>{terminated++;}})};
+ w.Tesseract={createWorker:async()=>({setParameters:async()=>{},recognize:async()=>{const i=recognized++%5,entry=[[20,'STS'],[260,'03/04/2026'],[460,'OIL'],[660,'1001.25'],[850,'1000.00']][i],left=[0,250,450,650,820][i];return {data:{tsv:header+[5,1,1,1,1,1,entry[0]-left,40,entry[1].length*7,20,96,entry[1]].join('\t')}};},terminate:async()=>{terminated++;}})};
  if(draft) w.localStorage.setItem('vef-calculator-current-v2',draft);
  w.eval(importer);w.eval(script);
  return {dom,w,get terminated(){return terminated;},get recognized(){return recognized;}};
@@ -32,7 +32,7 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,20));
   for(const [i,edge] of ['start','end'].entries()) d.querySelector('#photo-'+field+'-'+edge).value=bounds[i];
  }
  d.querySelector('#photoRead').click();await tick();
- assert.equal(a.recognized,1);assert.equal(a.terminated,1);
+ assert.equal(a.recognized,5);assert.equal(a.terminated,1);
  assert.equal(d.querySelectorAll('#photoRows input:checked').length,0);
  assert.equal(d.querySelector('#photoAppend').disabled,true);
  const checkbox=d.querySelector('#photoRows input');assert.ok(checkbox);checkbox.click();assert.equal(d.querySelector('#photoAppend').disabled,false);
@@ -53,5 +53,10 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,20));
  assert.equal(JSON.parse(restored.w.localStorage.getItem('vef-calculator-current-v2')).data.photoReviewPending,false);
  // Cancel has no effect on the main table and releases the photo.
  w.VEFPhotoImport.open();d.querySelector('#photoCancel').click();assert.equal(d.querySelectorAll('#tableBody tr').length,2);assert.equal(img.hasAttribute('src'),false);
+ // Separate camera input dispatch shares the same local recognition route.
+ w.VEFPhotoImport.open();const camera=d.querySelector('#photoCamera');
+ Object.defineProperty(camera,'files',{value:[new w.File(['x'],'camera.png',{type:'image/png'})]});camera.dispatchEvent(new w.Event('change'));
+ img.dispatchEvent(new w.Event('load'));assert.equal(d.querySelector('#photoRead').disabled,false);
+ d.querySelector('#photoCancel').click();assert.equal(d.querySelectorAll('#tableBody tr').length,2);
  a.dom.window.close();restored.dom.window.close();console.log('PASS: DOM file / camera controls → OCR preview → explicit selection → editable append → edit / reload gate → Calculate; cancellation cleanup.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

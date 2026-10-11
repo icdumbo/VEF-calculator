@@ -1,5 +1,7 @@
 # FULL: Import VEF from Photo — first implementation
 
+Historical report for the initial photo-only commit. Current Camera / Photo / PDF workflow, updated OCR method and test results: [PDF import review report](full-pdf-import.md).
+
 Scope: FULL only, based on main `bcf3df5a3d5483237aeaa22344139c5b8fb69bfe`. This branch is for review, not deployment or merge. BASIC Android, its signing, package and release refs are unchanged.
 
 ## Workflow
