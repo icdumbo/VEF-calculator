@@ -1,7 +1,9 @@
 # VEF-calculator
 Vessels VEF calculator 
 
-Current FULL Port/Terminal confidence recovery: [Port consensus report](docs/full-photo-port-confidence.md).
+Current FULL semantic column recognition: [Column detection report](docs/full-photo-semantic-columns.md).
+
+Previous Port/Terminal confidence recovery: [Port consensus report](docs/full-photo-port-confidence.md).
 
 Previous controlled cell recovery and B/L / Shore header aliases: [Cell retry report](docs/full-photo-cell-retries.md).
 

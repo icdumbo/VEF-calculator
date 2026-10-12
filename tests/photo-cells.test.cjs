@@ -150,3 +150,12 @@ test('port consensus survives final reliability assignment; cargo/date/numeric r
  for(const f of ['cargo','date','ship','bl'])assert.equal(rows[0][f],'');
  assert.ok(rows[0].warnings.some(w=>w.includes('concordant')));assert.equal(rows[0].sourceRow,1);
 });
+
+test('missing optional header preserves all geometric voyages, blank review cells and no extra OCR',async()=>{
+ const p=fixture(),s={...settings,regions:{date:[20,40],cargo:[40,60],ship:[60,80],bl:[80,100]}};
+ const bands=detectPhotoRows(p,s);assert.equal(bands.length,20);let calls=0;
+ const worker={setParameters:async()=>{},recognize:async c=>{calls++;const field=Math.floor(c.sourceLeft/100);return {data:{tsv:header+word(['','01/01/2026','OIL','1001.25','1000.25'][field])}};}};
+ const rows=await recognizePhotoCells(makeCanvas(p.width,p.height),s,bands,worker,makeCanvas);
+ assert.equal(calls,80);assert.equal(rows.length,20);
+ rows.forEach((r,i)=>{assert.equal(r.port,'');assert.equal(r.sourceRow,i+1);assert.equal(r.date,'2026-01-01');assert.equal(r.ship,'1001.25');assert.ok(r.warnings.some(w=>w.includes('column not identified')));});
+});

@@ -68,3 +68,47 @@ for(const label of ['B/L FIGURES','BL FIGURES','B/L QTY','SHORE FIGURES','SHORE 
  const rows=parse(tsv(data),1100,250,detected.regions,{...detected.options,numberMode:'dot'});
  assert.equal(rows[0].date,'2026-04-03');assert.equal(rows[0].ship,'1001.25');assert.equal(rows[0].bl,'1000');
 });
+
+const semanticFields=['port','cargo','date','ship','bl'];
+function semanticFixture(order,labels={}){
+ const names={port:'PORT / TERMINAL',cargo:'PRODUCT',date:'DATE',ship:'SF TCV',bl:'BoL TCV',...labels};
+ const values={port:'NORTH TERMINAL',cargo:'OIL',date:'02-01-2026',ship:'1200.25',bl:'1200.00'};
+ const h=order.map((f,i)=>word(40+i*200,30,names[f],96,110));
+ const cells=order.flatMap((f,i)=>[word(40+i*200,100,values[f]),word(40+i*200,130,values[f])]);
+ return {text:tsv([...h,...cells,word(40,165,'TOTAL')]),order};
+}
+test('semantic fields follow header positions in every column permutation',()=>{
+ const permutations=a=>a.length?a.flatMap((v,i)=>permutations(a.filter((_,j)=>j!==i)).map(p=>[v,...p])):[[]];
+ for(const order of permutations(semanticFields)){
+  const {text}=semanticFixture(order),s=detectPhotoTable(text,1100,250);assert.ok(s,order.join(','));
+  const rows=parse(text,1100,250,s.regions,{...s.options,numberMode:'dot'});
+  assert.equal(rows.length,2);assert.deepEqual([rows[0].port,rows[0].date,rows[0].cargo,rows[0].ship,rows[0].bl],['NORTH TERMINAL','2026-01-02','OIL','1200.25','1200']);
+ }
+});
+for(const ship of ["SHIP'S FIGURES",'SHIP FIGURES','VESSEL FIGURES','SF TCV','shipfigures','SFTCV'])for(const bl of ['B/L FIGURES','BL FIGURES','SHORE FIGURES','BoL TCV','B/L QTY','SHORE QTY'])test('semantic reordered aliases '+ship+' / '+bl,()=>{
+ const {text}=semanticFixture(['bl','cargo','date','port','ship'],{ship,bl}),s=detectPhotoTable(text,1100,250);assert.ok(s);
+ const rows=parse(text,1100,250,s.regions,{...s.options,numberMode:'dot'});assert.equal(rows[0].ship,'1200.25');assert.equal(rows[0].bl,'1200');
+});
+test('cropped optional Port stays unmapped; Cargo before bare DATE does not block quantity headers',()=>{
+ const {text}=semanticFixture(['cargo','date','ship','bl']),s=detectPhotoTable(text,1100,250);assert.ok(s);assert.equal(s.regions.port,undefined);
+ assert.ok(s.regions.cargo);assert.ok(s.regions.date);assert.ok(s.regions.ship);assert.ok(s.regions.bl);
+});
+test('semantic header aliases without paired quantity evidence never authorize a table',()=>{
+ const {text}=semanticFixture(['bl','cargo','date','port','ship']);assert.equal(detectPhotoTable(text.split('\n').slice(0,6).join('\n'),1100,250),null);
+});
+
+test('same-line spaced header words pair by adjacent text geometry, not only centre alignment',()=>{
+ const h=[word(40,30,'PRODUCT'),word(240,30,'DATE'),word(440,30,"SHIP'S",96,90),word(555,30,'FIGURES',96,130),word(840,30,'B/L',96,40),word(910,30,'FIGURES',96,130)];
+ const body=[word(240,100,'02-01-2026'),word(440,100,'1200.25'),word(840,100,'1200.00')];
+ const s=detectPhotoTable(tsv([...h,...body]),1100,250);assert.ok(s);assert.ok(s.regions.ship);assert.ok(s.regions.bl);
+});
+test('short preprocessed header retry maps padded/scaled OCR coordinates back to source geometry',async()=>{
+ const width=1100,height=250;function canvas(w,h){return {width:w,height:h,getContext:()=>({drawImage(){},fillRect(){},getImageData(){return {width:w,height:h,data:new Uint8ClampedArray(w*h*4).fill(255)};},putImageData(){}})};}
+ const heads=[word(40,90,'PRODUCT'),word(240,90,'DATE'),word(440,90,'SF TCV',96,100),word(640,90,'BoL TCV',96,100)];
+ const body=[word(240,150,'02-01-2026'),word(440,150,'1200.25'),word(640,150,'1200.00')];
+ const initial=tsv([heads[1],...body]);const top=30,bottom=148,scale=Math.min(4,Math.max(1,200/(bottom-top)),1800/width);
+ const transformed=heads.map(w=>({...w,x:w.x*scale+12,y:(w.y-top)*scale+12,w:w.w*scale,h:w.h*scale}));let calls=0;
+ const worker={setParameters:async()=>{},recognize:async()=>({data:{tsv:++calls===1?initial:calls===2?'':tsv(transformed)}})};
+ const result=await detectPhotoColumns(canvas(width,height),worker,canvas),settings=detectPhotoTable(result,width,height);
+ assert.equal(calls,3);assert.ok(settings);assert.ok(Math.abs(settings.anchors.cargo.x-40)<.001);assert.ok(Math.abs(settings.anchors.cargo.y-90)<.001);
+});
