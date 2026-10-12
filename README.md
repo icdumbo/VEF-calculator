@@ -1,7 +1,9 @@
 # VEF-calculator
 Vessels VEF calculator 
 
-Current FULL semantic column recognition: [Column detection report](docs/full-photo-semantic-columns.md).
+Current FULL complete table crop/header recovery: [Full-width report](docs/full-photo-full-width.md).
+
+Previous semantic column recognition: [Column detection report](docs/full-photo-semantic-columns.md).
 
 Previous Port/Terminal confidence recovery: [Port consensus report](docs/full-photo-port-confidence.md).
 

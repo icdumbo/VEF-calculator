@@ -269,6 +269,26 @@
         }
         return null;
     }
+    function photoHeaderCells(pixels) {
+        const {width,height,data}=pixels,dark=(x,y)=>{const i=(y*width+x)*4;return Math.max(data[i],data[i+1],data[i+2])<140;};
+        const lines=[];let group=[];
+        const flush=()=>{if(group.length)lines.push({start:group[0],end:group.at(-1),y:(group[0]+group.at(-1))/2});group=[];};
+        for(let y=0;y<height;y++){let n=0;for(let x=0;x<width;x++)if(dark(x,y))n++;if(n/width>.6)group.push(y);else flush();}flush();
+        const gaps=lines.slice(1).map((l,i)=>l.y-lines[i].y).filter(g=>g>8).sort((a,b)=>a-b),median=gaps[Math.floor(gaps.length/2)];
+        if(!median)return [];
+        const cells=[];
+        for(let k=0;k<lines.length-4;k++){
+            const gap=lines[k+1].y-lines[k].y;
+            if(gap<median*1.5 || gap>median*6 || ![1,2,3].every(j=>Math.abs((lines[k+j+1].y-lines[k+j].y)/median-1)<.35))continue;
+            const top=lines[k].end+2,bottom=lines[k+1].start-2,edges=[];group=[];
+            const edge=()=>{if(group.length)edges.push({start:group[0],end:group.at(-1)});group=[];};
+            for(let x=0;x<width;x++){let n=0;for(let y=top;y<bottom;y++)if(dark(x,y))n++;if(n/Math.max(1,bottom-top)>.65)group.push(x);else edge();}edge();
+            if(edges.length<4 || edges.length>17)continue;
+            for(let i=1;i<edges.length;i++){const left=edges[i-1].end+2,right=edges[i].start-2;if(right-left>=12)cells.push({left,right,top,bottom});}
+            break;
+        }
+        return cells;
+    }
     async function detectPhotoColumns(canvas, worker, makeCanvas) {
         const headerSource=makeCanvas?makeCanvas(canvas.width,canvas.height):null;
         if(headerSource)headerSource.getContext('2d').drawImage(canvas,0,0);
@@ -302,6 +322,18 @@
                 const lines=(retry.data.tsv || '').split(/\r?\n/).slice(1).map(line=>{const p=line.split('\t');if(+p[0]===5){p[6]=String((+p[6]-pad)/scale);p[7]=String((+p[7]-pad)/scale+top);p[8]=String(+p[8]/scale);p[9]=String(+p[9]/scale);}return p.join('\t');});
                 tsv+='\n'+lines.join('\n');
                 if(detectPhotoTable(tsv,canvas.width,canvas.height))break;
+            }
+        }
+        if(makeCanvas && !detectPhotoTable(tsv,canvas.width,canvas.height)) {
+            // Geometry determines header cells; OCR names them without an order assumption.
+            const pixels=headerSource.getContext('2d').getImageData(0,0,canvas.width,canvas.height);
+            for(const bounds of photoHeaderCells(pixels)){
+                const scale=Math.min(4,Math.max(1,120/(bounds.bottom-bounds.top)),1800/(bounds.right-bounds.left)),pad=12;
+                const crop=preparePhotoCell(headerSource,bounds,makeCanvas,120,false,150,false,true,'max');
+                await worker.setParameters({tessedit_pageseg_mode:'6',preserve_interword_spaces:'1'});
+                const result=await worker.recognize(crop,{}, {tsv:true});
+                const lines=(result.data.tsv || '').split(/\r?\n/).slice(1).map(line=>{const p=line.split('\t');if(+p[0]===5){p[6]=String((+p[6]-pad)/scale+bounds.left);p[7]=String((+p[7]-pad)/scale+bounds.top);p[8]=String(+p[8]/scale);p[9]=String(+p[9]/scale);}return p.join('\t');});
+                tsv+='\n'+lines.join('\n');
             }
         }
         return tsv;
@@ -498,7 +530,7 @@
         }
         return rows;
     }
-    const api = { portReadingConsensus, quantity, date, parse, removeTableRules, recognizeColumns, tsvWords, detectPhotoTable, detectPhotoColumns, detectPhotoRows, refinePhotoCellColumns, fitPhotoCellBounds, preparePhotoCell, photoCellContentBounds, inferPhotoNumberMode, recognizePhotoCells };
+    const api = { photoHeaderCells, portReadingConsensus, quantity, date, parse, removeTableRules, recognizeColumns, tsvWords, detectPhotoTable, detectPhotoColumns, detectPhotoRows, refinePhotoCellColumns, fitPhotoCellBounds, preparePhotoCell, photoCellContentBounds, inferPhotoNumberMode, recognizePhotoCells };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     root.VEFPhotoImport = api;
     if (typeof document === 'undefined') return;

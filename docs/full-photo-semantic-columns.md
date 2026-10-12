@@ -1,3 +1,5 @@
+Current crop/header follow-up: [Full-width report](full-photo-full-width.md). The crop limitation and results below describe the preceding commit.
+
 # FULL semantic photo columns — draft PR #2
 
 Scope: only `icdumbo/VEF-calculator`, `codex/full-photo-import`, parent `d4f1c92adeebeaa2a86a37649af635b7c9c10de7`. No merge, BASIC/main edits, PDF or calculation/export changes.

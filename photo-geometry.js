@@ -18,6 +18,23 @@
         const h=solve(a,b);return h?[...h,1]:null;
     }
     function point(h,x,y){const d=h[6]*x+h[7]*y+h[8];return [(h[0]*x+h[1]*y+h[2])/d,(h[3]*x+h[4]*y+h[5])/d];}
+    function supportedExtent(points,prior,range) {
+        // Broken/faint outer vertical rules may disappear while horizontal
+        // voyage rules still reach them. Require repeated, well-spread support.
+        let best=[];
+        for(let i=0;i<points.length;i++)for(let j=i+1;j<points.length;j++){
+            const a=points[i],b=points[j];if(Math.abs(b.y-a.y)<range*.25)continue;
+            const slope=(b.x-a.x)/(b.y-a.y);if(Math.abs(slope)>.22)continue;
+            const intercept=a.x-slope*a.y;
+            const support=points.filter(p=>Math.abs(p.x-slope*p.y-intercept)<=6);
+            if(support.length>best.length)best=support;
+        }
+        if(best.length<5 || best.length<points.length*.45 || Math.max(...best.map(p=>p.y))-Math.min(...best.map(p=>p.y))<range*.35)return prior;
+        let sx=0,sy=0,syy=0,sxy=0;for(const p of best){sx+=p.x;sy+=p.y;syy+=p.y*p.y;sxy+=p.x*p.y;}
+        const n=best.length,den=n*syy-sy*sy;if(Math.abs(den)<1)return prior;
+        const slope=(n*sxy-sx*sy)/den,b=(sx-slope*sy)/n;
+        return {...prior,slope,b};
+    }
     function findRuledFrame(pixels) {
         const {width,height,data}=pixels,scale=Math.min(1,800/Math.max(width,height)),w=Math.round(width*scale),h=Math.round(height*scale),dark=[];
         // Sample at a bounded resolution. Text alone must not create four long frame edges.
@@ -66,7 +83,24 @@
             }
             return current;
         };
-        const top=refine(hs[0],false),bottom=refine(hs.at(-1),false),left=refine(vs[0],true),right=refine(vs.at(-1),true);
+        const top=refine(hs[0],false),bottom=refine(hs.at(-1),false);
+        let left=refine(vs[0],true),right=refine(vs.at(-1),true);
+        if(best.length>=5){
+            const points=[],rightPoints=[];
+            for(const line of best){
+                const xs=[...new Set(dark.filter(([x,y])=>Math.abs(y-line.slope*x-line.b)<2).map(([x])=>x))].sort((a,b)=>a-b);
+                let runs=[],run=[];for(const x of xs){if(run.length && x-run.at(-1)>4){runs.push(run);run=[];}run.push(x);}if(run.length)runs.push(run);
+                runs.sort((a,b)=>(b.at(-1)-b[0])-(a.at(-1)-a[0]));const r=runs[0];
+                if(!r || r.at(-1)-r[0]<(right.position-left.position)*.6)continue;
+                const y=line.slope*r[0]+line.b;
+                if(r[0]<left.slope*y+left.b-Math.max(6,w*.025))points.push({x:r[0],y});
+                const ry=line.slope*r.at(-1)+line.b;
+                if(r.at(-1)>right.slope*ry+right.b+Math.max(6,w*.025))rightPoints.push({x:r.at(-1),y:ry});
+            }
+            if(points.length>=Math.max(5,best.length*.3))left=supportedExtent(points,left,best.at(-1).position-best[0].position);
+            if(rightPoints.length>=Math.max(5,best.length*.3))right=supportedExtent(rightPoints,right,best.at(-1).position-best[0].position);
+        }
+
         const intersect=(horizontal,vertical)=>{const den=1-horizontal.slope*vertical.slope;if(Math.abs(den)<.5)return null;const x=(vertical.slope*horizontal.b+vertical.b)/den;return [x/scale,(horizontal.slope*x+horizontal.b)/scale];};
         const corners=[intersect(top,left),intersect(top,right),intersect(bottom,right),intersect(bottom,left)];
         if(corners.some(p=>!p || p[0]<-10 || p[1]<-10 || p[0]>width+10 || p[1]>height+10))return null;
@@ -150,5 +184,5 @@
         const output=makeCanvas(result.width,result.height),ctx=output.getContext('2d'),image=ctx.createImageData(result.width,result.height);image.data.set(result.data);ctx.putImageData(image,0,0);
         return {canvas:output,corrected:true};
     }
-    const api={homography,point,findFrame,rectify,normalize};root.VEFPhotoGeometry=api;if(typeof module!=='undefined' && module.exports)module.exports=api;
+    const api={supportedExtent,homography,point,findFrame,rectify,normalize};root.VEFPhotoGeometry=api;if(typeof module!=='undefined' && module.exports)module.exports=api;
 })(typeof globalThis!=='undefined'?globalThis:this);

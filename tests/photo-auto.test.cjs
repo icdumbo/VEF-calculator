@@ -112,3 +112,12 @@ test('short preprocessed header retry maps padded/scaled OCR coordinates back to
  const result=await detectPhotoColumns(canvas(width,height),worker,canvas),settings=detectPhotoTable(result,width,height);
  assert.equal(calls,3);assert.ok(settings);assert.ok(Math.abs(settings.anchors.cargo.x-40)<.001);assert.ok(Math.abs(settings.anchors.cargo.y-90)<.001);
 });
+
+test('header grid cells are detected from row/column rules with no fixed order or percentages',()=>{
+ const {photoHeaderCells}=require('../photo-import.js'),width=500,height=450,data=new Uint8ClampedArray(width*height*4).fill(255);
+ const ink=(x,y)=>{const i=(y*width+x)*4;data[i]=data[i+1]=data[i+2]=0;};
+ for(const y of [20,100,130,160,190,220,250,280])for(let x=10;x<=490;x++)ink(x,y);
+ for(const x of [10,100,250,350,490])for(let y=20;y<=280;y++)ink(x,y);
+ const cells=photoHeaderCells({width,height,data});assert.equal(cells.length,4);assert.deepEqual(cells[0],{left:12,right:98,top:22,bottom:98});assert.equal(cells[3].right,488);
+ data.fill(255);assert.deepEqual(photoHeaderCells({width,height,data}),[]);
+});

@@ -75,6 +75,14 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,20));
  const ng=nd.querySelector('#photoFile');Object.defineProperty(ng,'files',{value:[new nw.File(['x'],'unruled.png',{type:'image/png'})]});ng.dispatchEvent(new nw.Event('change'));
  const ni=nd.querySelector('#photoImage');Object.defineProperties(ni,{naturalWidth:{value:1000},naturalHeight:{value:150}});ni.dispatchEvent(new nw.Event('load'));await tick();
  assert.match(nd.querySelector('#photoStatus').textContent,/Automatic row grid could not/);assert.equal(nd.querySelectorAll('#photoRows input').length,0);assert.equal(nd.querySelector('#photoAdvanced').open,true);noGrid.dom.window.close();
+ // CSS display width and devicePixelRatio cannot change intrinsic OCR coordinates.
+ let intrinsicMapping;
+ for(const ratio of [1,2,2.625,3]){
+  const z=app(),zw=z.w,zd=zw.document;Object.defineProperty(zw,'devicePixelRatio',{value:ratio});zw.VEFPhotoImport.open();
+  const input=zd.querySelector('#photoFile');Object.defineProperty(input,'files',{value:[new zw.File(['x'],'scaled.png',{type:'image/png'})]});input.dispatchEvent(new zw.Event('change'));
+  const zi=zd.querySelector('#photoImage');zi.style.width='160px';Object.defineProperties(zi,{naturalWidth:{value:1000},naturalHeight:{value:150}});zi.dispatchEvent(new zw.Event('load'));await tick();
+  assert.match(zd.querySelector('#photoStatus').textContent,/1 table rows found/);assert.equal(z.recognized,6);const mapping=zd.querySelector('#photo-port-start').value;if(intrinsicMapping===undefined)intrinsicMapping=mapping;else assert.equal(mapping,intrinsicMapping);z.dom.window.close();
+ }
  fallback.dom.window.close();
  a.dom.window.close();restored.dom.window.close();console.log('PASS: DOM file / camera controls → OCR preview → explicit selection → editable append → edit / reload gate → Calculate; cancellation cleanup.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
