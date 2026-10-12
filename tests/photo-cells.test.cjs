@@ -24,11 +24,11 @@ test('cell OCR locks split fragments and empty cells to their geometric voyage; 
  const p=fixture(),bands=detectPhotoRows(p,settings);let calls=0;
  const worker={setParameters:async()=>{},recognize:async c=>{calls++;const row=Math.round((c.sourceTop-52)/20),field=Math.floor(c.sourceLeft/100);const text=['PORT','01/01/2026','OIL','1001.25','1000.25'][field];return {data:{tsv:header+(row===5&&field===1?'':field===0?word('PORT')+'\n'+word('TERMINAL',96,12,30):word(text))}};}};
  const rows=await recognizePhotoCells(makeCanvas(p.width,p.height),settings,bands,worker,makeCanvas);
- assert.ok(calls>=100 && calls<=135,'Bounded retries only for the missing cell');assert.equal(rows.length,20);assert.equal(rows[5].date,'');assert.equal(rows[6].date,'2026-01-01');assert.equal(rows[5].port,'PORT TERMINAL');
+ assert.ok(calls>=200 && calls<=235,'Bounded confirmation reads, with extra retries only for the missing cell');assert.equal(rows.length,20);assert.equal(rows[5].date,'');assert.equal(rows[6].date,'2026-01-01');assert.equal(rows[5].port,'PORT TERMINAL');
  for(let i=0;i<20;i++){assert.equal(rows[i].sourceRow,i+1);assert.equal(rows[i].manualExclude,false);assert.equal(rows[i].qualified,undefined);assert.equal(rows[i].voyage,undefined);}
 });
 test('cell OCR keeps low-confidence numeric values and malformed / ambiguous quantities blank',async()=>{
- let field=0;const worker={setParameters:async p=>{if(p.tessedit_char_whitelist)field=p.tessedit_char_whitelist.includes('A')?0:p.tessedit_char_whitelist.includes('-')?1:3;},recognize:async()=>({data:{tsv:header+word(field===3?'1001.25':field===1?'01/01/2026':'PORT',field===3?84:96)}})};
+ let field=0;const worker={setParameters:async p=>{if(p.tessedit_char_whitelist)field=p.tessedit_char_whitelist.includes('A')?0:p.tessedit_char_whitelist.includes('-')?1:3;},recognize:async()=>({data:{tsv:header+word(field===3?'1001.25':field===1?'01/01/2026':'PORT',field===3?5:96)}})};
  const rows=await recognizePhotoCells(makeCanvas(500,600),{...settings,options:{...settings.options,numberMode:'auto'}},[{top:52,bottom:68}],worker,makeCanvas);
  assert.equal(rows[0].ship,'');assert.equal(rows[0].bl,'');assert.equal(rows[0].raw.ship,'1001.25');assert.equal(rows[0].date,'2026-01-01');
 });
@@ -37,7 +37,7 @@ test('uncertain cell replacement requires two confident agreeing variants; confl
   let portReads=0,field='port';
   const worker={setParameters:async p=>{if(p.tessedit_char_whitelist)field=p.tessedit_char_whitelist.includes('A')?'port':p.tessedit_char_whitelist.includes('-')?'date':'ship';},recognize:async()=>{
    let text=field==='date'?'01/01/2026':field==='ship'?'1001.25':portReads++===0?'UNCERTAIN':agree?'PORT':'OTHER'+portReads;
-   return {data:{tsv:header+word(text,text==='UNCERTAIN'?65:96)}};
+   return {data:{tsv:header+word(text,text==='UNCERTAIN'?20:96)}};
   }};
   const rows=await recognizePhotoCells(makeCanvas(500,600),settings,[{top:52,bottom:68}],worker,makeCanvas);
   assert.equal(rows[0].port,agree?'PORT':'');assert.equal(rows[0].ship,'1001.25');
@@ -70,7 +70,7 @@ test('photo convention inference needs independent confident unambiguous evidenc
 test('initial auto processing resolves and converts confident quantities within fixed rows; explicit correction wins',async()=>{
  for(const mode of ['auto','dot','comma']){
   let field=0;const params=[];
-  const worker={setParameters:async p=>params.push(p),recognize:async()=>({data:{tsv:header+word(['PORT','01/01/2026','OIL','6431.190','6446.031'][field++%5])}})};
+  const worker={setParameters:async p=>params.push(p),recognize:async c=>({data:{tsv:header+word(['PORT','01/01/2026','OIL','6431.190','6446.031'][Math.floor(c.sourceLeft/100)])}})};
   const rows=await recognizePhotoCells(makeCanvas(500,600),{...settings,options:{numberMode:mode}},[{top:52,bottom:68},{top:72,bottom:88}],worker,makeCanvas);
   assert.equal(rows.length,2);assert.equal(rows.numberMode,mode==='auto'?'dot':mode);
   assert.equal(rows[0].ship,mode==='comma'?'':'6431.19');assert.equal(rows[1].bl,mode==='comma'?'':'6446.031');
@@ -139,7 +139,7 @@ test('port consensus rejects conflicts, duplicate variants, identical pixels and
  assert.equal(portReadingConsensus([r(),r(undefined,undefined,'b')]),null);
  assert.equal(portReadingConsensus(['a','b','c'].map(v=>r('PORT -',[90,90],v))),null);
 });
-test('port consensus survives final reliability assignment; cargo/date/numeric rules stay strict',async()=>{
+test('semantic consensus survives final assignment for moderate text/date/numeric confidence',async()=>{
  const fields=['port','date','cargo','ship','bl'];let field='port';
  const worker={setParameters:async p=>{if(p.tessedit_char_whitelist)field=p.tessedit_char_whitelist.includes('A')?'text':p.tessedit_char_whitelist.includes('-')?'date':'number';},recognize:async c=>{
   const f=fields[Math.floor(c.sourceLeft/100)];
@@ -147,7 +147,7 @@ test('port consensus survives final reliability assignment; cargo/date/numeric r
  }};
  const rows=await recognizePhotoCells(makeCanvas(500,600),settings,[{top:52,bottom:68}],worker,makeCanvas);
  assert.equal(rows[0].port,'NORTH TERMINAL');assert.equal(rows[0].ocrReliable.port,true);
- for(const f of ['cargo','date','ship','bl'])assert.equal(rows[0][f],'');
+ assert.equal(rows[0].cargo,'NORTH TERMINAL');assert.equal(rows[0].date,'2026-01-01');assert.equal(rows[0].ship,'1001.25');assert.equal(rows[0].bl,'1001.25');
  assert.ok(rows[0].warnings.some(w=>w.includes('concordant')));assert.equal(rows[0].sourceRow,1);
 });
 
@@ -156,6 +156,33 @@ test('missing optional header preserves all geometric voyages, blank review cell
  const bands=detectPhotoRows(p,s);assert.equal(bands.length,20);let calls=0;
  const worker={setParameters:async()=>{},recognize:async c=>{calls++;const field=Math.floor(c.sourceLeft/100);return {data:{tsv:header+word(['','01/01/2026','OIL','1001.25','1000.25'][field])}};}};
  const rows=await recognizePhotoCells(makeCanvas(p.width,p.height),s,bands,worker,makeCanvas);
- assert.equal(calls,80);assert.equal(rows.length,20);
+ assert.ok(calls>=160 && calls<=240);assert.equal(rows.length,20);
  rows.forEach((r,i)=>{assert.equal(r.port,'');assert.equal(r.sourceRow,i+1);assert.equal(r.date,'2026-01-01');assert.equal(r.ship,'1001.25');assert.ok(r.warnings.some(w=>w.includes('column not identified')));});
+});
+
+test('per-cell semantic validation accepts terminal punctuation and unambiguous date separators only',()=>{
+ const {photoCellValue}=require('../photo-import.js');
+ for(const raw of ['ULSD 10 PPM','GASOLINE 95 UNL.','PRODUCT (95%), TYPE-A'])assert.equal(photoCellValue(raw,'cargo'),raw);
+ for(const raw of ['29-02-2024','29/02/2024','29.02.2024','29 - 02 - 2024'])assert.equal(photoCellValue(raw,'date',{dateOrder:'dmy'}),'2024-02-29');
+ for(const raw of ['29-02-2023','31/04/2026','1-2-202','01-02/2026','PORT -'])assert.equal(photoCellValue(raw,raw.startsWith('PORT')?'port':'date'),'');
+ assert.equal(photoCellValue('1,234.50','ship',{numberMode:'dot'}),'1234.5');assert.equal(photoCellValue('-123.5','bl',{numberMode:'dot'}),'');
+});
+test('moderate confidence needs independent valid cell agreement; conflict and weak-only reads stay flagged',()=>{
+ const {photoCellConsensus}=require('../photo-import.js');
+ const read=(raw,conf,k)=>({raw,variant:k,treatment:k,words:[{text:raw,conf}]});
+ assert.equal(photoCellConsensus([read('04-03-2026',72,'a'),read('04/03/2026',75,'b'),read('04.03.2026',55,'c')],'date',{dateOrder:'dmy'}).value,'2026-03-04');
+ assert.equal(photoCellConsensus([read('1001.25',72,'a'),read('1001.250',75,'b'),read('1001.25',55,'c')],'ship',{numberMode:'dot'}).value,'1001.25');
+ assert.equal(photoCellConsensus([read('1001.25',84,'a')],'ship',{numberMode:'dot'}),null);
+ assert.equal(photoCellConsensus([read('1001.25',72,'a'),read('1001.25',75,'b'),read('1001.25',55,'c'),read('1007.25',95,'d')],'ship',{numberMode:'dot'}),null);
+ assert.equal(photoCellConsensus(['a','b','c'].map(k=>read('1001.25',0,k)),'ship',{numberMode:'dot'}),null);
+});
+test('row-local grid alignment follows only its own separators and never changes global mapping',()=>{
+ const {photoRowCellRegions}=require('../photo-import.js'),width=500,height=100,data=new Uint8ClampedArray(width*height*4).fill(255);
+ for(const x of [2,110,215,325,430,499])for(let y=20;y<80;y++){const at=(y*width+x)*4;data[at]=data[at+1]=data[at+2]=0;}
+ const before=JSON.stringify(settings.regions),r=photoRowCellRegions({width,height,data},settings,{top:22,bottom:78});
+ assert.equal(JSON.stringify(settings.regions),before);assert.equal(r.port[1]*width/100,110);assert.equal(r.date[0],r.port[1]);assert.equal(r.bl[0],r.ship[1]);
+ data.fill(255);assert.deepEqual(photoRowCellRegions({width,height,data},settings,{top:22,bottom:78}),settings.regions);
+});
+test('adaptive threshold preserves image bounds and renders a local binary cell without neighboring pixels',()=>{
+ const {adaptivePhotoCell}=require('../photo-import.js'),c=makeCanvas(40,40);assert.equal(adaptivePhotoCell(c),c);assert.equal(c.width,40);assert.equal(c.height,40);
 });

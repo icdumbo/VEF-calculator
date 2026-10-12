@@ -19,7 +19,7 @@ function app(draft) {
  const headerWords=[[20,10,'PORT'],[70,10,'TERMINAL'],[230,10,'B/L'],[260,10,'DATE'],[460,10,'CARGO'],[660,0,"SHIP'S"],[660,30,'FIGURES'],[850,0,'B/L'],[850,30,'FIGURES'],[0,10,'VOY'],[950,10,'Qualified']];
  const dataWords=[[20,'STS'],[260,'03/04/2026'],[460,'OIL'],[660,'1001.25'],[850,'1000.00']];
  const detectionTSV=header+headerWords.map(([x,y,text])=>[5,1,1,1,1,1,x,y,text.length*5,15,96,text].join('\t')).join('\n')+'\n'+dataWords.map(([x,text])=>[5,1,1,1,1,1,x,90,text.length*7,20,96,text].join('\t')).join('\n');
- w.Tesseract={createWorker:async()=>({setParameters:async p=>{if(p.tessedit_pageseg_mode){if(p.tessedit_pageseg_mode==='6' || (p.tessedit_pageseg_mode!==psm && ['7','13'].includes(p.tessedit_pageseg_mode)))column=0;psm=p.tessedit_pageseg_mode;}},recognize:async canvas=>{recognized++;if(psm==='11')return {data:{tsv:w.badHeader?header:detectionTSV}};const entry=dataWords[column++];return {data:{tsv:header+[5,1,1,1,1,1,entry[0]-(canvas.left||0),90-(canvas.top||0),entry[1].length*7,20,96,entry[1]].join('\t')}};},terminate:async()=>{terminated++;}})};
+ w.Tesseract={createWorker:async()=>({setParameters:async p=>{if(p.tessedit_pageseg_mode){if(p.tessedit_pageseg_mode==='6' || (p.tessedit_pageseg_mode!==psm && ['7','13'].includes(p.tessedit_pageseg_mode)))column=0;psm=p.tessedit_pageseg_mode;}},recognize:async canvas=>{recognized++;if(psm==='11')return {data:{tsv:w.badHeader?header:detectionTSV}};const entry=dataWords.find(([x])=>x>=(canvas.left||0))||dataWords.at(-1);return {data:{tsv:header+[5,1,1,1,1,1,entry[0]-(canvas.left||0),90-(canvas.top||0),entry[1].length*7,20,96,entry[1]].join('\t')}};},terminate:async()=>{terminated++;}})};
  if(draft) w.localStorage.setItem('vef-calculator-current-v2',draft);
  w.eval(fs.readFileSync(path.join(__dirname,'../photo-geometry.js'),'utf8'));w.eval(importer);w.eval(script);
  return {dom,w,get terminated(){return terminated;},get recognized(){return recognized;}};
@@ -35,7 +35,7 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,20));
  await tick();
  assert.equal(d.querySelector('#photoNumbers').value,'auto');
  assert.match(d.querySelector('#photoStatus').textContent,/1 table rows found/);
- assert.equal(a.recognized,6);assert.equal(a.terminated,1);
+ assert.equal(a.recognized,11);assert.equal(a.terminated,1);
  assert.equal(d.querySelector('#photoAdvanced').open,false);
  assert.ok(d.querySelector('#photo-port-start').value,'Automatically assigned columns');
  assert.equal(d.querySelectorAll('#photoRows input:checked').length,0);
@@ -61,7 +61,7 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,20));
  // Separate camera input dispatch shares the same local recognition route.
  w.VEFPhotoImport.open();const camera=d.querySelector('#photoCamera');
  Object.defineProperty(camera,'files',{value:[new w.File(['x'],'camera.png',{type:'image/png'})]});camera.dispatchEvent(new w.Event('change'));
- img.dispatchEvent(new w.Event('load'));await tick();assert.equal(d.querySelector('#photoRead').disabled,false);assert.equal(a.recognized,12);
+ img.dispatchEvent(new w.Event('load'));await tick();assert.equal(d.querySelector('#photoRead').disabled,false);assert.equal(a.recognized,22);
  d.querySelector('#photoCancel').click();assert.equal(d.querySelectorAll('#tableBody tr').length,2);
  // Unrecognizable headers expose optional correction without importing / inventing values.
  const fallback=app(),fw=fallback.w,fd=fw.document;fw.badHeader=true;fw.VEFPhotoImport.open();
@@ -70,7 +70,7 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,20));
  assert.match(fd.querySelector('#photoStatus').textContent,/Automatic table detection could not/);assert.equal(fd.querySelector('#photoAdvanced').open,true);assert.equal(fd.querySelectorAll('#photoRows input').length,0);assert.equal(fd.querySelector('#photoAppend').disabled,true);
  for(const [field,bounds] of Object.entries({port:[0,25],date:[25,45],cargo:[45,65],ship:[65,82],bl:[82,100]}))for(const [i,edge] of ['start','end'].entries()){const input=fd.querySelector('#photo-'+field+'-'+edge);input.value=bounds[i];input.dispatchEvent(new fw.Event('input'));}
  fd.querySelector('#photoRead').click();await tick();assert.equal(fallback.recognized,7);assert.ok(fd.querySelector('#photoRows input'));assert.equal(fd.querySelectorAll('#photoRows input:checked').length,0);
- fw.badHeader=false;fd.querySelector('#photoAuto').click();await tick();assert.equal(fallback.recognized,13);assert.equal(fd.querySelector('#photoAdvanced').open,false);
+ fw.badHeader=false;fd.querySelector('#photoAuto').click();await tick();assert.equal(fallback.recognized,18);assert.equal(fd.querySelector('#photoAdvanced').open,false);
  const noGrid=app(),nw=noGrid.w,nd=nw.document;nw.noGrid=true;nw.VEFPhotoImport.open();
  const ng=nd.querySelector('#photoFile');Object.defineProperty(ng,'files',{value:[new nw.File(['x'],'unruled.png',{type:'image/png'})]});ng.dispatchEvent(new nw.Event('change'));
  const ni=nd.querySelector('#photoImage');Object.defineProperties(ni,{naturalWidth:{value:1000},naturalHeight:{value:150}});ni.dispatchEvent(new nw.Event('load'));await tick();
@@ -81,7 +81,7 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,20));
   const z=app(),zw=z.w,zd=zw.document;Object.defineProperty(zw,'devicePixelRatio',{value:ratio});zw.VEFPhotoImport.open();
   const input=zd.querySelector('#photoFile');Object.defineProperty(input,'files',{value:[new zw.File(['x'],'scaled.png',{type:'image/png'})]});input.dispatchEvent(new zw.Event('change'));
   const zi=zd.querySelector('#photoImage');zi.style.width='160px';Object.defineProperties(zi,{naturalWidth:{value:1000},naturalHeight:{value:150}});zi.dispatchEvent(new zw.Event('load'));await tick();
-  assert.match(zd.querySelector('#photoStatus').textContent,/1 table rows found/);assert.equal(z.recognized,6);const mapping=zd.querySelector('#photo-port-start').value;if(intrinsicMapping===undefined)intrinsicMapping=mapping;else assert.equal(mapping,intrinsicMapping);z.dom.window.close();
+  assert.match(zd.querySelector('#photoStatus').textContent,/1 table rows found/);assert.equal(z.recognized,11);const mapping=zd.querySelector('#photo-port-start').value;if(intrinsicMapping===undefined)intrinsicMapping=mapping;else assert.equal(mapping,intrinsicMapping);z.dom.window.close();
  }
  fallback.dom.window.close();
  a.dom.window.close();restored.dom.window.close();console.log('PASS: DOM file / camera controls → OCR preview → explicit selection → editable append → edit / reload gate → Calculate; cancellation cleanup.');

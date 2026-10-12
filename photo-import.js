@@ -459,62 +459,129 @@
         if(new Set(unique.map(r=>r.treatment)).size<2)return null;
         return strong.reduce((best,r)=>score(r)>score(best)?r:best);
     }
+    function photoRowCellRegions(pixels,settings,band) {
+        // Global semantic identity is fixed. Locate the same separators inside
+        // this row so a slightly sloping rule cannot clip the final digit.
+        const sorted=Object.entries(settings.regions).sort((a,b)=>a[1][0]-b[1][0]),width=pixels.width;
+        const boundaries=[sorted[0][1][0]*width/100,...sorted.map(x=>x[1][1]*width/100)],found=[];
+        for(let k=0;k<boundaries.length;k++){
+            const adjacent=[];if(k)adjacent.push(boundaries[k]-boundaries[k-1]);if(k+1<boundaries.length)adjacent.push(boundaries[k+1]-boundaries[k]);
+            const radius=Math.min(...adjacent)*.45,edge=boundaries[k],groups=[];let group=[];
+            const flush=()=>{if(group.length)groups.push((group[0]+group.at(-1))/2);group=[];};
+            for(let x=Math.max(0,Math.floor(edge-radius));x<Math.min(width,Math.ceil(edge+radius));x++){
+                let n=0;for(let y=band.top;y<band.bottom;y++){let dark=false;for(let dx=-2;dx<=2;dx++){if(x+dx<0 || x+dx>=width)continue;const i=(y*width+x+dx)*4;if(pixels.data[i]*.299+pixels.data[i+1]*.587+pixels.data[i+2]*.114<150){dark=true;break;}}if(dark)n++;}
+                if(n/Math.max(1,band.bottom-band.top)>.82)group.push(x);else flush();
+            }flush();
+            found.push(groups.sort((a,b)=>Math.abs(a-edge)-Math.abs(b-edge))[0] ?? edge);
+        }
+        if(found.some((x,i)=>i && x-found[i-1]<Math.max(12,(boundaries[i]-boundaries[i-1])*.5)))return settings.regions;
+        return Object.fromEntries(sorted.map(([f],i)=>[f,[found[i]/width*100,found[i+1]/width*100]]));
+    }
+    function photoCellValue(raw,field,options={}) {
+        if(field==='date')return date(raw.replace(/\s*([./-])\s*/g,'$1'),options.dateOrder);
+        if(field==='ship' || field==='bl'){
+            const mode=options.numberMode || 'auto';
+            if(mode!=='auto')return quantity(raw,mode);
+            const d=quantity(raw,'dot'),c=quantity(raw,'comma');
+            return d && c && d!==c?'ambiguous:'+raw.trim():d || c;
+        }
+        const text=raw.trim().replace(/\s+/g,' ').toUpperCase();
+        return /^[A-Z0-9](?:[A-Z0-9 /'&().,+:;%_-]*[A-Z0-9.)%])?$/.test(text) && /[A-Z0-9]/.test(text)?text:'';
+    }
+    function photoCellConsensus(readings,field,options={}) {
+        const score=r=>r.words.reduce((sum,w)=>sum+w.conf*w.text.length,0)/r.words.reduce((sum,w)=>sum+w.text.length,0);
+        const usable=readings.map(r=>({...r,value:photoCellValue(r.raw,field,options),score:score(r)})).filter(r=>r.value && r.words.length && r.words.every(w=>Number.isFinite(w.conf) && w.conf>=10) && r.score>=45);
+        const groups=new Map();for(const r of usable){if(!groups.has(r.value))groups.set(r.value,[]);groups.get(r.value).push(r);}
+        const supported=[];
+        for(const [value,all] of groups){
+            const unique=[...new Map(all.map(r=>[r.variant,r])).values()];
+            if(new Set(unique.map(r=>r.treatment)).size<2)continue;
+            const high=unique.filter(r=>r.score>=85 && r.words.every(w=>w.conf>=60));
+            const strong=unique.filter(r=>r.score>=65);
+            if(high.length<2 && !(unique.length>=3 && strong.length>=2))continue;
+            supported.push({value,all,best:unique.reduce((a,b)=>a.score>=b.score?a:b)});
+        }
+        if(supported.length!==1)return null;
+        const chosen=supported[0];
+        for(const [value,other] of groups)if(value!==chosen.value && (other.some(r=>r.score>=85) || new Set(other.filter(r=>r.score>=65).map(r=>r.variant)).size>=2))return null;
+        return chosen.best;
+    }
+    function smoothPhotoCell(image) {
+        const ctx=image.getContext('2d'),p=ctx.getImageData(0,0,image.width,image.height),source=p.data.slice(),weights=[1,2,1];
+        for(let y=1;y<image.height-1;y++)for(let x=1;x<image.width-1;x++){
+            let sum=0;for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++)sum+=source[((y+dy)*image.width+x+dx)*4]*weights[dy+1]*weights[dx+1];
+            const at=(y*image.width+x)*4,v=Math.round(sum/16);p.data[at]=p.data[at+1]=p.data[at+2]=v;
+        }
+        ctx.putImageData(p,0,0);return image;
+    }
+    function adaptivePhotoCell(image) {
+        const ctx=image.getContext('2d'),pixels=ctx.getImageData(0,0,image.width,image.height),{width,height,data}=pixels;
+        const stride=width+1,integral=new Float64Array(stride*(height+1));
+        for(let y=0;y<height;y++){let sum=0;for(let x=0;x<width;x++){sum+=data[(y*width+x)*4];integral[(y+1)*stride+x+1]=integral[y*stride+x+1]+sum;}}
+        const radius=Math.max(9,Math.ceil(height/8));
+        for(let y=0;y<height;y++)for(let x=0;x<width;x++){
+            const l=Math.max(0,x-radius),r=Math.min(width,x+radius+1),t=Math.max(0,y-radius),b=Math.min(height,y+radius+1);
+            const mean=(integral[b*stride+r]-integral[t*stride+r]-integral[b*stride+l]+integral[t*stride+l])/((r-l)*(b-t)),at=(y*width+x)*4,v=data[at]<mean-10?0:255;
+            data[at]=data[at+1]=data[at+2]=v;
+        }
+        ctx.putImageData(pixels,0,0);return image;
+    }
     async function recognizePhotoCells(canvas, settings, rowBands, worker, makeCanvas, progress=()=>{}) {
         const rows=[],sourcePixels=canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height);
         await worker.setParameters({tessedit_pageseg_mode:'7',preserve_interword_spaces:'1'});
         for(let i=0;i<rowBands.length;i++){
             const row={warnings:[],raw:{},ocrReliable:{},manualExclude:false,reason:'',sourceRow:i+1};
+            const cellRegions=settings.options.cellBinarize?photoRowCellRegions(sourcePixels,settings,rowBands[i]):settings.regions;
             for(const f of fields){
                 progress(i+1,rowBands.length,f);
                 if(!settings.regions[f]){row[f]='';row.raw[f]='';row.ocrReliable[f]=false;row.warnings.push(labels[fields.indexOf(f)]+': column not identified; verify original.');continue;}
-                const [a,b]=settings.regions[f],band=rowBands[i];
+                const [a,b]=cellRegions[f],band=rowBands[i];
                 let bounds={left:Math.ceil(a/100*canvas.width)+3,right:Math.floor(b/100*canvas.width)-3,top:band.top,bottom:band.bottom};
                 if(settings.options.cellBinarize)bounds=fitPhotoCellBounds(sourcePixels,bounds);
+                bounds.left=Math.max(Math.ceil(a/100*canvas.width)+1,bounds.left);bounds.right=Math.min(Math.floor(b/100*canvas.width)-1,bounds.right);
                 if(bounds.right<=bounds.left || bounds.bottom<=bounds.top)throw new Error('Invalid cell geometry; use Advanced correction.');
-                const whitelist=f==='date'?'0123456789-/.':(['ship','bl'].includes(f)?'0123456789., ':"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 /-'&().");
+                const whitelist=f==='date'?'0123456789-/.':(['ship','bl'].includes(f)?'0123456789., ':"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 /-'&().,+:;%_");
                 await worker.setParameters({tessedit_char_whitelist:whitelist});
                 const threshold=['ship','bl','date'].includes(f)?85:70;
-                const valid=raw=>f==='date'?!!date(raw,settings.options.dateOrder):['ship','bl'].includes(f)?!!(quantity(raw,'dot') || quantity(raw,'comma')):/^[A-Z0-9](?:[A-Z0-9 /'&().-]*[A-Z0-9])?$/.test(raw);
+                const valid=raw=>!!photoCellValue(raw,f,settings.options);
                 const reliable=r=>valid(r.raw) && r.words.length>0 && r.words.every(w=>w.conf>=threshold);
-                let contentCrop;
-                const read=async(size,binary,cutoff,sharpen=false,psm=7,verification=false,margin=0,channel='gray',stretch=1)=>{
+                let contentCrop;const readCache=new Map();
+                const read=async(size,binary,cutoff,sharpen=false,psm=7,verification=false,margin=0,channel='gray',stretch=1,adaptive=false)=>{
                     await worker.setParameters({tessedit_pageseg_mode:String(psm),tessedit_char_whitelist:verification?'':whitelist});
                     progress(i+1,rowBands.length,f);
                     // Retry margins stay inside this column and this geometric row.
-                    const crop=margin==='content'?(contentCrop ||= photoCellContentBounds(sourcePixels,bounds)):margin?{left:Math.max(Math.ceil(a/100*canvas.width)+1,bounds.left-margin),right:Math.min(Math.floor(b/100*canvas.width)-1,bounds.right+margin),top:Math.max(band.top-1,bounds.top-margin),bottom:Math.min(band.bottom+1,bounds.bottom+margin)}:bounds;
-                    const image=preparePhotoCell(canvas,crop,makeCanvas,size,binary,cutoff,sharpen,!!margin,channel,stretch);
-                    const treatment=JSON.stringify([crop,image.width,image.height,binary,binary?cutoff:null,sharpen,!!margin,channel,stretch]);
+                    const crop=margin==='content'?(contentCrop ||= photoCellContentBounds(sourcePixels,bounds)):margin?{left:Math.max(Math.ceil(a/100*canvas.width)+1,bounds.left-margin),right:Math.min(Math.floor(b/100*canvas.width)-1,bounds.right+margin),top:Math.max(band.top,bounds.top-margin),bottom:Math.min(band.bottom,bounds.bottom+margin)}:bounds;
+                    let image=preparePhotoCell(canvas,crop,makeCanvas,size,binary,cutoff,sharpen,!!margin || settings.options.cellBinarize,channel,stretch);
+                    if(adaptive==='smooth')image=smoothPhotoCell(image);else if(adaptive)image=adaptivePhotoCell(image);
+                    const treatment=JSON.stringify([crop,image.width,image.height,binary,binary?cutoff:null,sharpen,!!margin || settings.options.cellBinarize,channel,stretch,adaptive]);
                     const variant=JSON.stringify([treatment,psm,verification]);
+                    if(readCache.has(variant))return readCache.get(variant);
                     const result=await worker.recognize(image,{}, {tsv:true});
                     const words=tsvWords(result.data.tsv || '').sort((a,b)=>Math.abs(a.y-b.y)>Math.min(a.h,b.h)*.6?a.y-b.y:a.x-b.x);
-                    return {variant,treatment,words,raw:words.map(w=>w.text).join(' ').replace(['ship','bl'].includes(f)?/\s*([.,])\s*/g:/$^/g,'$1')};
+                    const reading={variant,treatment,words,raw:words.map(w=>w.text).join(' ').replace(['ship','bl'].includes(f)?/\s*([.,])\s*/g:/$^/g,'$1')};readCache.set(variant,reading);return reading;
                 };
                 const primary=await read(f==='cargo'?100:60,f==='port'?false:settings.options.cellBinarize,150);
-                let {words,raw}=primary,portConsensus=false;
-                if(!reliable({words,raw})){
+                let {words,raw}=primary,accepted=false;
+                {
                     const readings=[primary],variants=settings.options.cellBinarize?[[80,false,150],[140,false,150],[140,true,150],[100,true,170],[100,true,130],[100,false,150],[60,true,150],[160,false,150,true],[160,true,150,true],[140,true,150,false,6],[200,false,150,false,6]]:[[140,false,150],[80,false,150],[60,false,150],[160,false,150,true],[140,false,150,false,6]];
-                    if(['ship','bl','date'].includes(f))variants.push([60,settings.options.cellBinarize,150,false,7,true],[80,settings.options.cellBinarize,150,false,7,true]);
+                    if(['ship','bl','date'].includes(f))variants.unshift([80,false,150,false,7,true,'content','max'],[100,false,150,false,7,true,'content','max']);
                     variants.push([100,false,150,false,7,false,2],[80,false,150,false,7,false,2],[100,true,150,false,7,false,2],[100,true,170,false,7,false,2],[100,true,130,false,7,false,2],[100,false,150,false,6,false,2],[100,false,150,false,8,false,2]);
                     variants.push([100,false,150,false,7,false,'content','max'],[80,false,150,false,7,false,'content','max'],[100,true,150,false,7,false,'content','max'],[80,true,170,false,7,false,'content','max']);
                     variants.push([100,false,150,false,7,false,2,'max'],[80,false,150,false,7,false,2,'max'],[100,true,170,false,7,false,2,'max'],[140,true,170,false,7,false,2,'max']);
                     variants.push([100,false,150,false,7,false,'content','max',1.15],[80,false,150,false,7,false,'content','max',1.15],[100,true,150,false,7,false,'content','max',1.15],[80,true,150,false,7,false,'content','max',1.15],[100,false,150,false,6,false,'content','max'],[100,true,150,false,6,false,'content','max']);
+                    variants.unshift([100,false,150,false,7,true,2,'max',1,'smooth'],[140,false,150,false,7,true,2,'max',1,'smooth'],[100,false,150,false,7,false,'content','max',1,true],[100,false,150,false,7,true,'content','max',1,true]);
                     // Try content crops first: they remove border noise without extra row OCR.
                     variants.sort((a,b)=>(a[6]==='content'?0:a[6]?1:2)-(b[6]==='content'?0:b[6]?1:2));
-                    for(const [size,binary,cutoff,sharpen,psm,verification,margin,channel,stretch] of variants){
-                        const alternative=await read(size,binary,cutoff,sharpen,psm,verification,margin,channel,stretch);readings.push(alternative);
-                        // A retry may replace an uncertain first reading only if an
-                        // second preprocessing / segmentation variant agrees, without relaxing confidence.
-                        if(reliable(alternative) && readings.slice(0,-1).some(r=>r.raw===alternative.raw && reliable(r)) && readings.filter(reliable).every(r=>r.raw===alternative.raw)){
-                            words=alternative.words;raw=alternative.raw;break;
-                        }
+                    for(const [size,binary,cutoff,sharpen,psm,verification,margin,channel,stretch,adaptive] of variants.slice(0,34)){
+                        const alternative=await read(size,binary,cutoff,sharpen,psm,verification,margin,channel,stretch,adaptive);readings.push(alternative);
+                        const agreed=photoCellConsensus(readings,f,settings.options);
+                        if(agreed && !settings.options.cellBinarize){words=agreed.words;raw=agreed.raw;accepted=true;break;}
                     }
-                    if(f==='port' && !reliable({words,raw})){
-                        const agreed=portReadingConsensus(readings);
-                        if(agreed){words=agreed.words;raw=agreed.raw;portConsensus=true;row.warnings.push('Port / Terminal: accepted by concordant cell OCR; verify proper name.');}
-                    }
+                    if(settings.options.cellBinarize){const agreed=photoCellConsensus(readings,f,settings.options);if(agreed){words=agreed.words;raw=agreed.raw;accepted=true;}}
                 }
-                row.raw[f]=raw;row.ocrReliable[f]=portConsensus || reliable({words,raw});
-                row[f]=!row.ocrReliable[f]?'':['ship','bl'].includes(f)?quantity(raw,settings.options.numberMode):f==='date'?date(raw,settings.options.dateOrder):raw;
+                row.raw[f]=raw;row.ocrReliable[f]=accepted;
+                row[f]=!row.ocrReliable[f]?'':['ship','bl'].includes(f)?quantity(raw,settings.options.numberMode):photoCellValue(raw,f,settings.options);
+                if(accepted && !reliable({words,raw}))row.warnings.push(labels[fields.indexOf(f)]+': accepted by concordant cell OCR; verify value.');
                 if(!row[f])row.warnings.push(labels[fields.indexOf(f)]+(raw?': unreadable / ambiguous ('+raw+')':': missing'));
             }
             // A blank cell, or extra OCR fragment, cannot create, delete or shift a geometric row.
@@ -530,7 +597,7 @@
         }
         return rows;
     }
-    const api = { photoHeaderCells, portReadingConsensus, quantity, date, parse, removeTableRules, recognizeColumns, tsvWords, detectPhotoTable, detectPhotoColumns, detectPhotoRows, refinePhotoCellColumns, fitPhotoCellBounds, preparePhotoCell, photoCellContentBounds, inferPhotoNumberMode, recognizePhotoCells };
+    const api = { smoothPhotoCell, photoRowCellRegions, photoCellValue, photoCellConsensus, adaptivePhotoCell, photoHeaderCells, portReadingConsensus, quantity, date, parse, removeTableRules, recognizeColumns, tsvWords, detectPhotoTable, detectPhotoColumns, detectPhotoRows, refinePhotoCellColumns, fitPhotoCellBounds, preparePhotoCell, photoCellContentBounds, inferPhotoNumberMode, recognizePhotoCells };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     root.VEFPhotoImport = api;
     if (typeof document === 'undefined') return;

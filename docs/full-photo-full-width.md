@@ -1,3 +1,5 @@
+Current per-cell OCR follow-up: [Cell OCR report](full-photo-semantic-cell-ocr.md). Results below describe the preceding crop/header commit.
+
 # FULL complete table crop and header-grid fallback — draft PR #2
 
 Only `icdumbo/VEF-calculator`, branch `codex/full-photo-import`, parent `4fc681cf58019d11575c878f64af66d7f57b0ef6`. Keep draft unmerged; no BASIC/main changes. This phase fixes table width and header discovery, not individual value OCR.
