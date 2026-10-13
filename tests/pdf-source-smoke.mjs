@@ -65,7 +65,7 @@ try{
  const summary={mode,...(mode==='photo'?{numberConvention:rows.numberMode}:{}),expectedRows:expected.length,recognizedRows:rows.length,fullyCorrectRows:0,correctFields:0,blankFields:0,wrongFields:0,ocrCalls,perField:Object.fromEntries(fields.map(f=>[f,{correct:0,blank:0,wrong:0}])),mismatches:[]};
  for(let i=0;i<expected.length;i++){
   let complete=true;
-  for(const f of fields){const actual=rows[i]?.[f] || '',target=expected[i][f];const equal=(f==='ship'||f==='bl')?actual!=='' && Number(actual)===Number(target):actual===target;
+  for(const f of fields){const actual=rows[i]?.[f] || '',target=expected[i][f];if(target===null){complete=false;continue;}const equal=(f==='ship'||f==='bl')?actual!=='' && Number(actual)===Number(target):actual===target;
    const result=equal?'correct':actual===''?'blank':'wrong';summary.perField[f][result]++;
    if(equal)summary.correctFields++;else{complete=false;summary[result==='blank'?'blankFields':'wrongFields']++;summary.mismatches.push({row:i+1,field:f,type:result});}
   }

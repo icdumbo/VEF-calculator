@@ -186,3 +186,45 @@ test('row-local grid alignment follows only its own separators and never changes
 test('adaptive threshold preserves image bounds and renders a local binary cell without neighboring pixels',()=>{
  const {adaptivePhotoCell}=require('../photo-import.js'),c=makeCanvas(40,40);assert.equal(adaptivePhotoCell(c),c);assert.equal(c.width,40);assert.equal(c.height,40);
 });
+
+test('photograph family validation requires independent moderate support and rejects supported alternatives',()=>{
+ const {photoFamilyConsensus}=require('../photo-import.js');
+ const read=(raw,conf,k)=>({raw,variant:k,treatment:k,words:[{text:raw,conf}]});
+ const family=(raw,conf=90)=>['a','b','c'].map(k=>read(raw,conf,k));
+ assert.equal(photoFamilyConsensus([family('1234.5')],'ship',{numberMode:'dot'}).value,'1234.5');
+ assert.equal(photoFamilyConsensus([family('1234.5',72)],'ship',{numberMode:'dot'}),null);
+ assert.equal(photoFamilyConsensus([family('1234.5',72),family('1234.500',74)],'ship',{numberMode:'dot'}).value,'1234.5');
+ assert.equal(photoFamilyConsensus([family('1234.5'),family('1239.5')],'ship',{numberMode:'dot'}),null);
+ const mixed=[...family('1234.5'),read('1239.5',91,'d'),read('1239.5',92,'e')];
+ assert.equal(photoFamilyConsensus([mixed,family('1234.5')],'ship',{numberMode:'dot'}),null);
+ assert.equal(photoFamilyConsensus([family('04/03/2026',72),family('04-03-2026',75)],'date',{dateOrder:'dmy'}).value,'2026-03-04');
+ assert.equal(photoFamilyConsensus([[],[]],'port'),null);
+});
+test('native texture treatments use a bounded copy of the same cell and preserve the input geometry',()=>{
+ const {nativePhotoCell}=require('../photo-import.js'),original=makeCanvas(500,600),bounds={left:102,right:198,top:52,bottom:68},before={...bounds};
+ for(const kind of ['gaussian','median','binary'])for(const strength of [1,2]){
+  const out=nativePhotoCell(original,bounds,makeCanvas,kind,strength);
+  assert.equal(out.width,96);assert.equal(out.height,16);assert.equal(out.sourceLeft,102);assert.equal(out.sourceTop,52);
+  assert.deepEqual(bounds,before);assert.notEqual(out,original);
+ }
+});
+test('photograph native retries confirm moderate cells, remain bounded and do not override conflicting families',async()=>{
+ for(const conflict of [false,true]){
+  let field='',calls=0;
+  const worker={setParameters:async()=>{},recognize:async c=>{
+   calls++;let raw={port:'EAST TERMINAL',date:'09-05-2026',cargo:'PRODUCT 7',ship:'1205.25',bl:'1200.5'}[field];
+   if(conflict && field==='bl' && c.sourceLeft===0)raw='1209.5';
+   return {data:{tsv:header+word(raw,72)}};
+  }};
+  const rows=await recognizePhotoCells(makeCanvas(500,600),{...settings,options:{...settings.options,cellBinarize:true}},[{top:52,bottom:68}],worker,makeCanvas,(_i,_n,f)=>{field=f;});
+  assert.equal(rows.length,1);assert.equal(rows[0].port,'EAST TERMINAL');assert.equal(rows[0].date,'2026-05-09');
+  assert.equal(rows[0].ship,'1205.25');assert.equal(rows[0].bl,conflict?'':'1200.5');
+  assert.ok(calls<=5*67,'Legacy and native cell reads have finite independent budgets');
+  assert.equal(rows[0].manualExclude,false);assert.equal(rows[0].reason,'');assert.equal(rows[0].sourceRow,1);
+ }
+});
+test('identical native pixels cannot masquerade as two independent moderate families',()=>{
+ const {photoFamilyConsensus}=require('../photo-import.js');
+ const family=()=>['a','b','c'].map(k=>({raw:'908.25',variant:k,treatment:k,pixelKey:'same-native-'+k,words:[{text:'908.25',conf:72}]}));
+ assert.equal(photoFamilyConsensus([family(),family()],'ship',{numberMode:'dot'}),null);
+});

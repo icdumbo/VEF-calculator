@@ -526,6 +526,42 @@
         }
         ctx.putImageData(pixels,0,0);return image;
     }
+    // Suppress fine photographed-screen texture before enlargement. Only this
+    // cell's pixels are used; filtering never changes table/row coordinates.
+    function nativePhotoCell(canvas,bounds,makeCanvas,kind,strength) {
+        const out=makeCanvas(bounds.right-bounds.left,bounds.bottom-bounds.top),ctx=out.getContext('2d');
+        ctx.drawImage(canvas,bounds.left,bounds.top,out.width,out.height,0,0,out.width,out.height);
+        const p=ctx.getImageData(0,0,out.width,out.height);
+        if(!['gaussian','content'].includes(kind))removeTableRules(p,{cell:[0,100]});
+        for(let i=0;i<p.data.length;i+=4)p.data[i]=p.data[i+1]=p.data[i+2]=Math.max(p.data[i],p.data[i+1],p.data[i+2]);
+        if(kind==='median'){
+            const original=p.data.slice(),radius=strength,values=[];
+            for(let y=radius;y<out.height-radius;y++)for(let x=radius;x<out.width-radius;x++){
+                values.length=0;for(let dy=-radius;dy<=radius;dy++)for(let dx=-radius;dx<=radius;dx++)values.push(original[((y+dy)*out.width+x+dx)*4]);
+                values.sort((a,b)=>a-b);const i=(y*out.width+x)*4;p.data[i]=p.data[i+1]=p.data[i+2]=values[values.length>>1];
+            }
+        }
+        ctx.putImageData(p,0,0);
+        if(kind!=='median')for(let n=0;n<strength;n++)smoothPhotoCell(out);
+        return out;
+    }
+    function photoFamilyConsensus(families,field,options={}) {
+        const picked=families.map(rs=>photoCellConsensus(rs,field,options));
+        const winners=[...new Map(picked.flatMap((r,i)=>r?[[r.pixelKey || 'family:'+i,r]]:[])).values()];
+        if(!winners.length || new Set(winners.map(r=>r.value)).size!==1)return null;
+        const best=winners.reduce((a,b)=>a.score>=b.score?a:b);
+        // Moderate confidence needs support from independently prepared families.
+        if(best.score<85 && winners.length<2)return null;
+        const conflicts=new Map();
+        for(const r of families[0]){
+            const value=photoCellValue(r.raw,field,options),score=r.words.reduce((n,w)=>n+w.conf*w.text.length,0)/r.words.reduce((n,w)=>n+w.text.length,0);
+            if(!value || value===best.value || score<85 || r.words.some(w=>!Number.isFinite(w.conf) || w.conf<10))continue;
+            if(!conflicts.has(value))conflicts.set(value,new Set());conflicts.get(value).add(r.treatment);
+        }
+        // Do not replace an unresolved legacy cell when distinct pixel treatments
+        // repeatedly support another valid value. Never synthesize a compromise.
+        return [...conflicts.values()].some(s=>s.size>=2)?null:best;
+    }
     async function recognizePhotoCells(canvas, settings, rowBands, worker, makeCanvas, progress=()=>{}) {
         const rows=[],sourcePixels=canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height);
         await worker.setParameters({tessedit_pageseg_mode:'7',preserve_interword_spaces:'1'});
@@ -577,7 +613,39 @@
                         const agreed=photoCellConsensus(readings,f,settings.options);
                         if(agreed && !settings.options.cellBinarize){words=agreed.words;raw=agreed.raw;accepted=true;break;}
                     }
-                    if(settings.options.cellBinarize){const agreed=photoCellConsensus(readings,f,settings.options);if(agreed){words=agreed.words;raw=agreed.raw;accepted=true;}}
+                    if(settings.options.cellBinarize){
+                        const legacy=photoCellConsensus(readings,f,settings.options);
+                        const stable=legacy && legacy.score>=90 && legacy.words.every(w=>w.conf>=60);
+                        const families=[readings],nativeCache=new Map();
+                        for(const kind of (stable?[]:['gaussian','median','content','binary'])){
+                            const family=[];
+                            for(const strength of [1,2]){
+                                const native=nativePhotoCell(canvas,bounds,makeCanvas,kind,strength);
+                                for(const binary of (kind==='binary'?[140,160,180]:[false,true]))for(const size of [80,120]){
+                                    if(family.length>=8)continue;
+                                    progress(i+1,rowBands.length,f);
+                                    let source=native;
+                                    if(kind==='binary'){
+                                        source=makeCanvas(native.width,native.height);const ctx=source.getContext('2d'),p=native.getContext('2d').getImageData(0,0,native.width,native.height);
+                                        for(let j=0;j<p.data.length;j+=4)p.data[j]=p.data[j+1]=p.data[j+2]=p.data[j]<binary?0:255;
+                                        ctx.putImageData(p,0,0);
+                                    }
+                                    let localBounds={left:0,right:source.width,top:0,bottom:source.height};
+                                    if(kind==='content')localBounds=photoCellContentBounds(source.getContext('2d').getImageData(0,0,source.width,source.height),localBounds);
+                                    const image=preparePhotoCell(source,localBounds,makeCanvas,size,kind==='binary'?false:binary,150,false,true,'gray');
+                                    await worker.setParameters({tessedit_pageseg_mode:'7',tessedit_char_whitelist:''});
+                                    const treatment=JSON.stringify([kind==='content'?'gaussian':kind,strength,binary,size,localBounds]);
+                                    if(!nativeCache.has(treatment)){
+                                        const result=await worker.recognize(image,{}, {tsv:true}),words=tsvWords(result.data.tsv || '').sort((a,b)=>a.x-b.x);
+                                        nativeCache.set(treatment,{words,raw:words.map(w=>w.text).join(' '),variant:treatment,treatment,pixelKey:treatment});
+                                    }
+                                    family.push(nativeCache.get(treatment));
+                                }
+                            }
+                            families.push(family);
+                        }
+                        const agreed=stable?legacy:photoFamilyConsensus(families,f,settings.options);if(agreed){words=agreed.words;raw=agreed.raw;accepted=true;}
+                    }
                 }
                 row.raw[f]=raw;row.ocrReliable[f]=accepted;
                 row[f]=!row.ocrReliable[f]?'':['ship','bl'].includes(f)?quantity(raw,settings.options.numberMode):photoCellValue(raw,f,settings.options);
@@ -597,7 +665,7 @@
         }
         return rows;
     }
-    const api = { smoothPhotoCell, photoRowCellRegions, photoCellValue, photoCellConsensus, adaptivePhotoCell, photoHeaderCells, portReadingConsensus, quantity, date, parse, removeTableRules, recognizeColumns, tsvWords, detectPhotoTable, detectPhotoColumns, detectPhotoRows, refinePhotoCellColumns, fitPhotoCellBounds, preparePhotoCell, photoCellContentBounds, inferPhotoNumberMode, recognizePhotoCells };
+    const api = { nativePhotoCell, photoFamilyConsensus, smoothPhotoCell, photoRowCellRegions, photoCellValue, photoCellConsensus, adaptivePhotoCell, photoHeaderCells, portReadingConsensus, quantity, date, parse, removeTableRules, recognizeColumns, tsvWords, detectPhotoTable, detectPhotoColumns, detectPhotoRows, refinePhotoCellColumns, fitPhotoCellBounds, preparePhotoCell, photoCellContentBounds, inferPhotoNumberMode, recognizePhotoCells };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     root.VEFPhotoImport = api;
     if (typeof document === 'undefined') return;
