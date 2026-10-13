@@ -1,7 +1,7 @@
 # VEF-calculator
 Vessels VEF calculator 
 
-Current FULL per-cell OCR: [Native filtering and validation report](docs/full-photo-native-cell-ocr.md). Previous [semantic cell OCR report](docs/full-photo-semantic-cell-ocr.md) remains available.
+Current FULL per-cell OCR: [Semantic evidence reconciliation report](docs/full-photo-semantic-evidence.md). Previous [native filtering report](docs/full-photo-native-cell-ocr.md) and [semantic cell OCR report](docs/full-photo-semantic-cell-ocr.md) remain available.
 
 Previous complete table crop/header recovery: [Full-width report](docs/full-photo-full-width.md).
 

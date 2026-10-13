@@ -562,6 +562,93 @@
         // repeatedly support another valid value. Never synthesize a compromise.
         return [...conflicts.values()].some(s=>s.size>=2)?null:best;
     }
+    function cleanPhotoCellEdges(image,cutoff=140) {
+        const ctx=image.getContext('2d'),p=ctx.getImageData(0,0,image.width,image.height),{width,height,data}=p;
+        const dark=(x,y)=>data[(y*width+x)*4]<cutoff,white=(x,y)=>{const i=(y*width+x)*4;data[i]=data[i+1]=data[i+2]=255;};
+        const columns=[];
+        for(let x=0;x<width;x++){
+            if(x>height*.4 && x<width-height*.4)continue;
+            let n=0,top=false,bottom=false;const end=Math.ceil(height*.08);
+            for(let y=0;y<height;y++)if(dark(x,y)){n++;if(y<end)top=true;if(y>=height-end)bottom=true;}
+            // A border spans both ends; a tall glyph inside the row does not.
+            if(n/height>.65 && top && bottom)columns.push(x);
+        }
+        for(const x of columns)for(let dx=-1;dx<=1;dx++)if(x+dx>=0 && x+dx<width)for(let y=0;y<height;y++)white(x+dx,y);
+        const rows=[];
+        for(let y=0;y<height;y++){
+            if(y>height*.1 && y<height*.9)continue;
+            let n=0,left=false,right=false;const end=Math.ceil(width*.05);
+            for(let x=0;x<width;x++)if(dark(x,y)){n++;if(x<end)left=true;if(x>=width-end)right=true;}
+            if(n/width>.6 && left && right)rows.push(y);
+        }
+        for(const y of rows)for(let dy=-1;dy<=1;dy++)if(y+dy>=0 && y+dy<height)for(let x=0;x<width;x++)white(x,y+dy);
+        ctx.putImageData(p,0,0);return image;
+    }
+    async function photoCellPixelKey(image) {
+        const data=image.getContext('2d').getImageData(0,0,image.width,image.height).data;
+        if(root.crypto?.subtle){
+            const bytes=new Uint8Array(data.length+8),view=new DataView(bytes.buffer);
+            view.setUint32(0,image.width);view.setUint32(4,image.height);bytes.set(data,8);
+            const hash=new Uint8Array(await root.crypto.subtle.digest('SHA-256',bytes));
+            return [...hash].map(x=>x.toString(16).padStart(2,'0')).join('');
+        }
+        // Deterministic fallback for test/older contexts; both hashes include
+        // every byte, with dimensions kept separately to distinguish shapes.
+        let a=2166136261,b=5381;
+        for(const value of data){a=Math.imul(a^value,16777619);b=(Math.imul(b,33)^value)>>>0;}
+        return image.width+':'+image.height+':'+(a>>>0)+':'+b;
+    }
+    async function recognizePhotoCellEdges(canvas,bounds,worker,makeCanvas,progress=()=>{}) {
+        const readings=[],cache=new Map();
+        for(const cutoff of [140,165]){
+            const source=cleanPhotoCellEdges(nativePhotoCell(canvas,bounds,makeCanvas,'gaussian',1),cutoff);
+            for(const size of [60,90])for(const psm of [7,6]){
+                progress();
+                const crop=preparePhotoCell(source,{left:0,right:source.width,top:0,bottom:source.height},makeCanvas,size,false,150,false,true,'gray');
+                await worker.setParameters({tessedit_pageseg_mode:String(psm),tessedit_char_whitelist:''});
+                const treatment=await photoCellPixelKey(crop),variant=JSON.stringify([treatment,psm]);
+                if(!cache.has(variant)){
+                    const result=await worker.recognize(crop,{}, {tsv:true}),words=tsvWords(result.data.tsv || '').sort((a,b)=>Math.abs(a.y-b.y)>Math.min(a.h,b.h)*.6?a.y-b.y:a.x-b.x);
+                    cache.set(variant,{words,raw:words.map(w=>w.text).join(' '),variant,treatment,pixelKey:treatment});
+                }
+                readings.push(cache.get(variant));
+            }
+        }
+        return readings;
+    }
+    // Retain every semantically valid cell candidate, including zero-confidence
+    // words. Agreement is counted once per pixel treatment, never per retry.
+    function photoCellEvidenceGroups(families,field,options={}) {
+        const groups=new Map();
+        families.forEach((readings,family)=>{
+            for(const r of readings){
+                const value=photoCellValue(r.raw,field,options),length=r.words.reduce((n,w)=>n+w.text.length,0);
+                if(!value || !length || r.words.some(w=>!Number.isFinite(w.conf) || w.conf<0))continue;
+                const score=r.words.reduce((n,w)=>n+w.conf*w.text.length,0)/length,key=r.pixelKey || family+':'+r.treatment;
+                if(!groups.has(value))groups.set(value,new Map());
+                const pixels=groups.get(value),old=pixels.get(key);
+                if(!old || score>old.score)pixels.set(key,{...r,value,score,family:old?.family ?? family});
+            }
+        });
+        return [...groups].map(([value,pixels])=>{
+            const readings=[...pixels.values()];
+            return {value,count:pixels.size,families:new Set(readings.map(r=>r.family)).size,best:readings.reduce((a,b)=>a.score>=b.score?a:b)};
+        }).sort((a,b)=>b.count-a.count || b.best.score-a.best.score);
+    }
+    function reconcilePhotoCellEvidence(families,field,options={},current=null) {
+        const groups=photoCellEvidenceGroups(families,field,options);
+        if(current){
+            // A repeated valid numeric/date alternative can be credible even
+            // when only one of its corroborating reads has high confidence.
+            if(['date','ship','bl'].includes(field) && groups.some(g=>g.value!==current.value && g.count>=2 && g.families>=2 && g.best.score>=85))return null;
+            return current;
+        }
+        const best=groups[0];
+        // No confidence floor: require a clearly dominant, repeated value from
+        // distinct preparations. Conflicting repeated valid values stay blank.
+        if(!best || best.count<4 || best.families<2 || best.count<3*(groups[1]?.count || 0) || groups.slice(1).some(g=>g.count>=4 && g.families>=2))return null;
+        return best.best;
+    }
     async function recognizePhotoCells(canvas, settings, rowBands, worker, makeCanvas, progress=()=>{}) {
         const rows=[],sourcePixels=canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height);
         await worker.setParameters({tessedit_pageseg_mode:'7',preserve_interword_spaces:'1'});
@@ -644,7 +731,12 @@
                             }
                             families.push(family);
                         }
-                        const agreed=stable?legacy:photoFamilyConsensus(families,f,settings.options);if(agreed){words=agreed.words;raw=agreed.raw;accepted=true;}
+                        let agreed=stable?legacy:reconcilePhotoCellEvidence(families,f,settings.options,photoFamilyConsensus(families,f,settings.options));
+                        if(!agreed){
+                            families.push(await recognizePhotoCellEdges(canvas,bounds,worker,makeCanvas,()=>progress(i+1,rowBands.length,f)));
+                            agreed=reconcilePhotoCellEvidence(families,f,settings.options,photoFamilyConsensus(families,f,settings.options));
+                        }
+                        if(agreed){words=agreed.words;raw=agreed.raw;accepted=true;}
                     }
                 }
                 row.raw[f]=raw;row.ocrReliable[f]=accepted;
@@ -665,7 +757,7 @@
         }
         return rows;
     }
-    const api = { nativePhotoCell, photoFamilyConsensus, smoothPhotoCell, photoRowCellRegions, photoCellValue, photoCellConsensus, adaptivePhotoCell, photoHeaderCells, portReadingConsensus, quantity, date, parse, removeTableRules, recognizeColumns, tsvWords, detectPhotoTable, detectPhotoColumns, detectPhotoRows, refinePhotoCellColumns, fitPhotoCellBounds, preparePhotoCell, photoCellContentBounds, inferPhotoNumberMode, recognizePhotoCells };
+    const api = { photoCellPixelKey, cleanPhotoCellEdges, recognizePhotoCellEdges, photoCellEvidenceGroups, reconcilePhotoCellEvidence, nativePhotoCell, photoFamilyConsensus, smoothPhotoCell, photoRowCellRegions, photoCellValue, photoCellConsensus, adaptivePhotoCell, photoHeaderCells, portReadingConsensus, quantity, date, parse, removeTableRules, recognizeColumns, tsvWords, detectPhotoTable, detectPhotoColumns, detectPhotoRows, refinePhotoCellColumns, fitPhotoCellBounds, preparePhotoCell, photoCellContentBounds, inferPhotoNumberMode, recognizePhotoCells };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     root.VEFPhotoImport = api;
     if (typeof document === 'undefined') return;

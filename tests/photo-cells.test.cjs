@@ -228,3 +228,50 @@ test('identical native pixels cannot masquerade as two independent moderate fami
  const family=()=>['a','b','c'].map(k=>({raw:'908.25',variant:k,treatment:k,pixelKey:'same-native-'+k,words:[{text:'908.25',conf:72}]}));
  assert.equal(photoFamilyConsensus([family(),family()],'ship',{numberMode:'dot'}),null);
 });
+
+test('valid low-confidence text, calendar dates and quantities use independent semantic agreement',()=>{
+ const {reconcilePhotoCellEvidence}=require('../photo-import.js');
+ const read=(raw,k,conf=0)=>({raw,variant:k,treatment:k,pixelKey:k,words:[{text:raw,conf}]});
+ for(const [field,raw,value] of [['port','NORTH QUAY','NORTH QUAY'],['cargo','PRODUCT 8','PRODUCT 8'],['date','29/02/2032','2032-02-29'],['ship','9125.125','9125.125'],['bl','9,125.125','9125.125']]){
+  const families=[[read(raw,'a'),read(raw,'b')],[read(raw,'c'),read(raw,'d')]];
+  const result=reconcilePhotoCellEvidence(families,field,{numberMode:'dot',dateOrder:'dmy'});
+  assert.equal(result.value,value);assert.equal(result.score,0,'Zero confidence alone must not reject repeated valid OCR');
+ }
+ for(const [field,raw] of [['date','31/02/2032'],['ship','9,12.125'],['bl','0'],['cargo','| BROKEN']]){
+  assert.equal(reconcilePhotoCellEvidence([[read(raw,'a'),read(raw,'b')],[read(raw,'c'),read(raw,'d')]],field,{numberMode:'dot'}),null);
+ }
+});
+test('weak conflicting values, duplicate pixels and one-family echoes cannot establish reliable agreement',()=>{
+ const {reconcilePhotoCellEvidence}=require('../photo-import.js');
+ const read=(raw,k)=>({raw,variant:k,treatment:k,pixelKey:k,words:[{text:raw,conf:0}]});
+ const good=['a','b','c','d','e','f'].map(k=>read('9125.125',k)),other=['g','h','i','j'].map(k=>read('9125.135',k));
+ assert.equal(reconcilePhotoCellEvidence([good.slice(0,3).concat(other.slice(0,2)),good.slice(3).concat(other.slice(2))],'ship',{numberMode:'dot'}),null);
+ assert.equal(reconcilePhotoCellEvidence([good],'ship',{numberMode:'dot'}),null);
+ assert.equal(reconcilePhotoCellEvidence([good.slice(0,2),good.slice(0,2)],'ship',{numberMode:'dot'}),null);
+});
+test('a repeated valid date or numeric alternative vetoes a selection even with uneven confidence',()=>{
+ const {reconcilePhotoCellEvidence}=require('../photo-import.js');
+ const read=(raw,k,conf)=>({raw,variant:k,treatment:k,pixelKey:k,words:[{text:raw,conf}]});
+ const current={...read('9125.125','base',80),value:'9125.125',score:80};
+ assert.equal(reconcilePhotoCellEvidence([[read('9125.135','a',90)],[read('9125.135','b',0)]],'ship',{numberMode:'dot'},current),null);
+});
+test('local edge cleaning preserves tall glyphs away from the row ends and all central text pixels',()=>{
+ const {cleanPhotoCellEdges}=require('../photo-import.js'),width=160,height=100,data=new Uint8ClampedArray(width*height*4).fill(255);
+ const ink=(x,y)=>{const i=(y*width+x)*4;data[i]=data[i+1]=data[i+2]=0;};
+ for(let y=0;y<height;y++)ink(2,y);
+ for(let x=0;x<width;x++)ink(x,1);
+ for(let y=10;y<90;y++)ink(10,y); // tall legitimate letter, not a spanning rule
+ for(let y=40;y<70;y++)for(let x=75;x<85;x++)ink(x,y);
+ let pixels={width,height,data};const canvas={width,height,getContext:()=>({getImageData:()=>({...pixels,data:pixels.data.slice()}),putImageData:p=>{pixels=p;}})};
+ assert.equal(cleanPhotoCellEdges(canvas),canvas);assert.equal(canvas.width,width);assert.equal(canvas.height,height);
+ assert.equal(pixels.data[(50*width+2)*4],255);assert.equal(pixels.data[(1*width+80)*4],255);
+ assert.equal(pixels.data[(50*width+10)*4],0);assert.equal(pixels.data[(50*width+80)*4],0);
+});
+test('pixel evidence keys depend on the image bytes and shape, not preprocessing labels',async()=>{
+ const {photoCellPixelKey}=require('../photo-import.js');
+ const a=await photoCellPixelKey(makeCanvas(20,20)),b=await photoCellPixelKey(makeCanvas(20,20)),reshaped=await photoCellPixelKey(makeCanvas(10,40));
+ assert.equal(a,b);assert.notEqual(a,reshaped);
+ const data=new Uint8ClampedArray(20*20*4).fill(255);data[40]=0;
+ const changed={width:20,height:20,getContext:()=>({getImageData:()=>({width:20,height:20,data})})};
+ assert.notEqual(a,await photoCellPixelKey(changed));
+});
