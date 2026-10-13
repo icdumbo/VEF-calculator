@@ -121,3 +121,16 @@ test('header grid cells are detected from row/column rules with no fixed order o
  const cells=photoHeaderCells({width,height,data});assert.equal(cells.length,4);assert.deepEqual(cells[0],{left:12,right:98,top:22,bottom:98});assert.equal(cells[3].right,488);
  data.fill(255);assert.deepEqual(photoHeaderCells({width,height,data}),[]);
 });
+
+test('a valid partial table still retries its observed header cells to recover an unread optional header',async()=>{
+ const width=500,height=450,source=new Uint8ClampedArray(width*height*4).fill(255);
+ const ink=(x,y)=>{const i=(y*width+x)*4;source[i]=source[i+1]=source[i+2]=0;};
+ for(const y of [20,100,130,160,190,220,250,280])for(let x=10;x<=490;x++)ink(x,y);
+ for(const x of [10,100,200,300,400,490])for(let y=20;y<=280;y++)ink(x,y);
+ function canvas(w,h){const data=w===width&&h===height?new Uint8ClampedArray(source):new Uint8ClampedArray(w*h*4).fill(255);return {width:w,height:h,getContext:()=>({drawImage(){},fillRect(){},getImageData:()=>({width:w,height:h,data:new Uint8ClampedArray(data)}),putImageData(){}})};}
+ const initial=tsv([word(110,50,'DATE',96,40),word(210,50,'CARGO',96,50),word(310,50,'SFTCV',96,60),word(410,50,'BoLTCV',96,60),word(310,115,'1200.25',96,60),word(410,115,'1200.00',96,60)]);
+ assert.equal(detectPhotoTable(initial,width,height).regions.port,undefined);
+ let calls=0;const worker={setParameters:async()=>{},recognize:async()=>({data:{tsv:++calls===1?initial:tsv([word(20,50,'PORT/TERMINAL',96,65)])}})};
+ const result=await detectPhotoColumns(canvas(width,height),worker,canvas),settings=detectPhotoTable(result,width,height);
+ assert.equal(calls,6);assert.ok(settings.regions.port);assert.ok(settings.anchors.port.x<100);
+});

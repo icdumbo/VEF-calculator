@@ -324,8 +324,10 @@
                 if(detectPhotoTable(tsv,canvas.width,canvas.height))break;
             }
         }
-        if(makeCanvas && !detectPhotoTable(tsv,canvas.width,canvas.height)) {
+        const partial=detectPhotoTable(tsv,canvas.width,canvas.height);
+        if(makeCanvas && (!partial || fields.some(f=>!partial.regions[f]))) {
             // Geometry determines header cells; OCR names them without an order assumption.
+            // A valid partial table must not suppress recovery of an unread optional header.
             const pixels=headerSource.getContext('2d').getImageData(0,0,canvas.width,canvas.height);
             for(const bounds of photoHeaderCells(pixels)){
                 const scale=Math.min(4,Math.max(1,120/(bounds.bottom-bounds.top)),1800/(bounds.right-bounds.left)),pad=12;
@@ -339,7 +341,7 @@
         return tsv;
     }
     // Photo only: line geometry fixes row identity before any cell OCR.
-    function detectPhotoRows(pixels, settings) {
+    function detectPhotoRowsLegacy(pixels, settings) {
         const {width,height,data}=pixels, ranges=Object.values(settings.regions);
         if(['date','ship','bl'].some(f=>!settings.regions[f]))return null;
         const left=Math.ceil(Math.min(...ranges.map(r=>r[0]))/100*width),right=Math.floor(Math.max(...ranges.map(r=>r[1]))/100*width);
@@ -357,6 +359,57 @@
         // Missing rules / prose / merged geometry require explicit correction, never guessed row splitting.
         if(gaps.length>100 || median<8 || gaps.some(g=>g<median*.65 || g>median*1.45))return null;
         return selected.slice(1).map((l,i)=>({top:selected[i].end+2,bottom:l.start-2}));
+    }
+    // Independently observed short rule segments tolerate residual skew and
+    // unequal column widths. Never interpolate a missing separator or row.
+    function detectPhotoRows(pixels,settings) {
+        const original=detectPhotoRowsLegacy(pixels,settings);
+        if(original)return original;
+        if(['date','ship','bl'].some(f=>!settings.regions[f]))return null;
+        const {width,height,data}=pixels,ranges=Object.values(settings.regions);
+        const left=Math.max(0,Math.ceil(Math.min(...ranges.map(r=>r[0]))*width/100)),right=Math.min(width-1,Math.floor(Math.max(...ranges.map(r=>r[1]))*width/100)),span=right-left;
+        if(span<60)return null;
+        const first=settings.evidence?.firstY,last=settings.evidence?.lastY,footer=settings.evidence?.footerTop;
+        if(!Number.isFinite(first) || !Number.isFinite(last) || first>last)return null;
+        const radius=Math.max(4,Math.min(14,Math.round(height/180))),half=Math.max(8,Math.min(28,Math.floor(span/40)));
+        const from=Math.max(0,Math.floor(Math.min(settings.options.top*height/100,first)-radius*4)),to=Math.min(height-1,Math.ceil((footer??settings.options.bottom*height/100)+radius*5));
+        const strips=[];
+        for(let k=0;k<9;k++){
+            const x=Math.max(half,Math.min(width-half-1,Math.round(left+span*(k+.5)/9))),profile=[];
+            for(let y=from;y<=to;y++){let sum=0,n=0;for(let dx=-half;dx<=half;dx+=2){const i=(y*width+x+dx)*4;sum+=data[i]*.299+data[i+1]*.587+data[i+2]*.114;n++;}profile.push(sum/n);}
+            const rules=[];let group=[];
+            const flush=()=>{if(group.length){const start=group[0],end=group.at(-1);if(end-start<=radius*2)rules.push({x,y:(start+end)/2,start,end});}group=[];};
+            for(let y=from;y<=to;y++){
+                const at=y-from,background=Math.max(profile[Math.max(0,at-radius)],profile[Math.min(profile.length-1,at+radius)]);
+                let n=0,total=0;const threshold=Math.min(200,background-22);
+                for(let dx=-half;dx<=half;dx+=2){const i=(y*width+x+dx)*4;if(data[i]*.299+data[i+1]*.587+data[i+2]*.114<threshold)n++;total++;}
+                if(background-profile[at]>25 && n/total>.78)group.push(y);else flush();
+            }flush();strips.push(rules);
+        }
+        const tracks=[],tolerance=Math.max(2,half*.08);
+        for(const a of strips[0])for(const b of strips.at(-1)){
+            const slope=(b.y-a.y)/(b.x-a.x);if(Math.abs(slope)>.12)continue;
+            const points=strips.map(rs=>rs.filter(r=>Math.abs(r.y-(a.y+slope*(r.x-a.x)))<=tolerance).sort((u,v)=>Math.abs(u.y-(a.y+slope*(u.x-a.x)))-Math.abs(v.y-(a.y+slope*(v.x-a.x))))[0]).filter(Boolean);
+            if(points.length<7)continue;
+            const mx=points.reduce((s,p)=>s+p.x,0)/points.length,my=points.reduce((s,p)=>s+p.y,0)/points.length;
+            const m=points.reduce((s,p)=>s+(p.x-mx)*(p.y-my),0)/points.reduce((s,p)=>s+(p.x-mx)**2,0),y=my+m*((left+right)/2-mx),thickness=Math.max(...points.map(p=>p.end-p.start))/2+1;
+            if(points.some(p=>Math.abs(p.y-(my+m*(p.x-mx)))>tolerance))continue;
+            if(!tracks.some(t=>Math.abs(t.y-y)<radius))tracks.push({y,slope:m,x:(left+right)/2,thickness});
+        }
+        tracks.sort((a,b)=>a.y-b.y);
+        // The first/last observed data centers must be enclosed by real rules.
+        const start=tracks.findLastIndex(t=>t.y<first),end=tracks.findIndex(t=>t.y>last);
+        if(start<0 || end<=start || Number.isFinite(footer) && tracks[end].y>=footer)return null;
+        const selected=tracks.slice(start,end+1),gaps=selected.slice(1).map((t,i)=>t.y-selected[i].y),sorted=[...gaps].sort((a,b)=>a-b),median=sorted[Math.floor(sorted.length/2)];
+        if(gaps.length>100 || median<8 || gaps.some(g=>g<median*.65 || g>median*1.45))return null;
+        const bands=selected.slice(1).map((lower,i)=>({top:Math.ceil(selected[i].y+selected[i].thickness+2),bottom:Math.floor(lower.y-lower.thickness-2),upper:selected[i],lower}));
+        if(bands.some(b=>Object.values(settings.regions).some(r=>{const s=photoRowCellBand(b,r[0]*width/100,r[1]*width/100);return s.bottom-s.top<8;})))return null;
+        return bands;
+    }
+    function photoRowCellBand(band,left,right) {
+        if(!band.upper)return band;
+        const at=(t,x)=>t.y+t.slope*(x-t.x);
+        return {top:Math.ceil(Math.max(at(band.upper,left),at(band.upper,right))+band.upper.thickness+2),bottom:Math.floor(Math.min(at(band.lower,left),at(band.lower,right))-band.lower.thickness-2)};
     }
     function refinePhotoCellColumns(pixels, settings, bands) {
         if(!settings.anchors || !bands?.length)return settings;
@@ -658,7 +711,7 @@
             for(const f of fields){
                 progress(i+1,rowBands.length,f);
                 if(!settings.regions[f]){row[f]='';row.raw[f]='';row.ocrReliable[f]=false;row.warnings.push(labels[fields.indexOf(f)]+': column not identified; verify original.');continue;}
-                const [a,b]=cellRegions[f],band=rowBands[i];
+                const [a,b]=cellRegions[f],band=photoRowCellBand(rowBands[i],a/100*canvas.width,b/100*canvas.width);
                 let bounds={left:Math.ceil(a/100*canvas.width)+3,right:Math.floor(b/100*canvas.width)-3,top:band.top,bottom:band.bottom};
                 if(settings.options.cellBinarize)bounds=fitPhotoCellBounds(sourcePixels,bounds);
                 bounds.left=Math.max(Math.ceil(a/100*canvas.width)+1,bounds.left);bounds.right=Math.min(Math.floor(b/100*canvas.width)-1,bounds.right);
