@@ -152,3 +152,46 @@ study of 1,340 recorded readings in the 20 empty scored cells changed neither
 raw strings nor canonical values. Normalization alone cannot resolve this photo.
 The individual cell audit contains private document values and remains outside
 the repository. Nineteen scored cells still require manual inspection.
+
+## Replaying observed cell treatments (2026-10-14)
+
+The native glyph/context stage remains the first decision. Only when it has
+insufficient evidence, with no glyph conflict, a fallback regenerates at most
+four existing whole-cell treatments that produced compatible candidates. It
+reuses their recorded crop and processing parameters; it does not change
+geometry, segmentation or search neighbouring cells. Word text and all character
+boxes must still match an observed candidate. Confidence prioritizes attempts;
+it does not decide correctness. Replayed text OCR remains unrestricted.
+
+Both passes share an actual-pixel/configuration cache. At most eight word images,
+48 disputed-glyph reads and 96 context reads are possible per rejected cell:
+152 unique OCR calls maximum. Native reads repeated in the second pass are
+reused, not counted as new evidence. Repeated bitmaps cannot create agreement.
+An accepted native result stops processing. Prior credible context alternatives
+and contradictory modes on the same pixels veto a replay winner, even if later
+isolated glyphs seem to resolve it. All recovered values retain review warnings.
+
+| Source | Before: correct / blank / wrong | After: correct / blank / wrong |
+| --- | --- | --- |
+| First photograph | 100 / 0 / 0 | 100 / 0 / 0 |
+| Difficult photograph | 80 / 19 / 0 | 81 / 18 / 0 |
+| Existing digital PDF | 100 / 0 / 0 | 100 / 0 / 0 |
+
+All documents retain 20 rows and the five target columns. One previously blank
+calendar date becomes a correct reviewable suggestion. Unflagged correct values
+remain 67; correct values with warnings increase from 13 to 14. The difficult
+photo has 99 scored fields, with one unscored Cargo; zero wrong scored values.
+The prior quantity recovery remains unchanged.
+
+167/167 unit tests pass, including the existing 162 and five replay tests for
+weak-candidate recovery, bounded scheduling, metadata validation and preservation
+of earlier contradiction vetoes. Photo/Camera and digital/scanned PDF DOM checks
+pass. Only photo-import.js, the new replay test and this document change.
+
+Difficult-photo requests increase from 5,641 to 5,793. The new private experiment
+made 155 fresh engine calls; final production-pipeline verification reused 5,793
+exact-image/parameter results and took 118.136 seconds. These measurements are
+not cold-run speed comparisons. First-photo verification uses 239 requests;
+digital PDF uses zero. No Android test or preview publication was performed.
+Real source documents, expected values, caches and detailed diagnostics remain
+outside the repository.
