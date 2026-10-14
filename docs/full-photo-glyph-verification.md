@@ -42,7 +42,8 @@ values. This change does not relax the original acceptance policy.
 5. Read only disputed characters using single-character segmentation (PSM 10),
    two bounded paddings and two sizes. Text remains unrestricted; numeric/date
    glyphs use a digit whitelist. Deduplicate by actual pixel content and OCR
-   configuration. Maximum additional budget: 4 word reads + 24 glyph reads.
+   configuration. First-stage budget: 4 word reads + 24 glyph reads; the
+   follow-up context stage below adds at most 48 reads for unresolved positions.
 6. Require three distinct glyph images across two filter families, at least one
    moderately confident glyph observation, and no credible contradictory glyph.
    Every disputed position must select exactly one already observed valid value.
@@ -98,3 +99,56 @@ These are local tests, not real Android verification. Twenty scored cells remain
 blank. Dates and Cargo did not improve. Additional real photographs, unreadable
 characters and memory/runtime on Android still need validation. This is a narrow
 recovery improvement, not a completed solution to photo OCR.
+
+## Follow-up: unresolved glyph context (2026-10-14)
+
+Reference: `6c3c19c`. The single-character stage remains the first check. Its
+verified positions are retained independently; a conflict blocks further retries.
+Only positions with insufficient evidence are reread with up to one adjacent
+alphanumeric character on each side. Existing separators stop expansion. The
+same validated word boxes, cell pixels and pixel/configuration cache are reused.
+PSM 7 and 13 must not provide contradictory valid strings for identical pixels.
+Three distinct span images, two filtering families, a sufficiently informative
+span read and consistency with every confirmed glyph are required. The result
+must still select one originally observed, semantically valid whole-cell value.
+No mixed letter/digit-class fallback, character substitution, invented separator
+or token reordering is enabled.
+
+The additional stage is bounded at 48 span reads per rejected cell (three ranges,
+four prepared images, two paddings, two modes). It does not retry confirmed glyph
+positions and never changes an already populated field. The first-stage budget
+remains four word reads plus up to 24 isolated-character reads.
+
+| Column | Before: correct / blank / wrong | After |
+| --- | --- | --- |
+| Port / Terminal | 14 / 6 / 0 | 14 / 6 / 0 |
+| B/L Date | 18 / 2 / 0 | 18 / 2 / 0 |
+| Cargo | 12 / 7 / 0 | 12 / 7 / 0 |
+| Ship's Figures | 17 / 3 / 0 | 17 / 3 / 0 |
+| B/L Figures | 18 / 2 / 0 | 19 / 1 / 0 |
+| Total (99 scored fields) | 79 / 20 / 0 | 80 / 19 / 0 |
+
+Correct values without warnings remain 67. Correct values with warnings increase
+from 12 to 13; one previously empty quantity becomes a correct review suggestion.
+The former ambiguity warning is preserved. No warning is added to already
+accepted fields. The new suggestion is not an automatic calculation or import.
+
+All 154 existing tests plus eight context tests pass: 162/162. The first photo
+was rechecked without OCR caching at 100/100, 20 rows and 239 requests. The digital
+PDF remains 100/100, 20 rows and zero OCR. Photo/Camera and digital/scanned PDF DOM
+smokes pass. Table geometry, perspective, cell bounds and column mapping are
+unchanged. Real Android performance/accuracy has not been tested.
+
+The difficult-photo full pipeline uses 5,641 OCR requests, versus 5,577 at the
+reference. Its measured run took 122.554 seconds with 5,577 exact-image/configuration
+cache hits and 64 fresh engine calls. No cold-run speedup is claimed.
+
+Separate local probes kept outside GitHub investigated short character groups
+(147 fresh requests, 14.330 s) and a deliberately relaxed letter/digit-class
+experiment (215 fresh requests, 18.075 s). Dates still had conflicting results
+between segmentation modes. Mixed-class text produced incomplete or unsupported
+strings, so that relaxation was not incorporated. An isolated normalization
+study of 1,340 recorded readings in the 20 empty scored cells changed neither
+raw strings nor canonical values. Normalization alone cannot resolve this photo.
+The individual cell audit contains private document values and remains outside
+the repository. Nineteen scored cells still require manual inspection.
