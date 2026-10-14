@@ -702,8 +702,77 @@
         if(!best || best.count<4 || best.families<2 || best.count<3*(groups[1]?.count || 0) || groups.slice(1).some(g=>g.count>=4 && g.families>=2))return null;
         return best.best;
     }
+    // A secondary check of disputed glyphs, not another vote on whole words.
+    // Only an already observed, valid candidate can be recovered. Different
+    // character classes, lengths or separators cannot be guessed into agreement.
+    function photoGlyphPlan(families,field,options={}) {
+        if(['ship','bl'].includes(field) && (!options.numberMode || options.numberMode==='auto'))return null;
+        const normalize=raw=>raw.normalize('NFC').replace(/\s+/g,'').toUpperCase().replace(field==='date'?/[/.]/g:/$^/g,'-');
+        const groups=photoCellEvidenceGroups(families,field,options).filter(g=>g.count>=2 && !g.value.startsWith('ambiguous:'));
+        if(groups.length<2)return null;
+        const first=normalize(groups[0].best.raw);
+        if(!/^[\x20-\x7e]+$/.test(first))return null;
+        const candidates=groups.map(g=>({...g,text:normalize(g.best.raw)})).filter(g=>g.text.length===first.length && [...g.text].every((ch,k)=>/[A-Z0-9]/.test(ch)===/[A-Z0-9]/.test(first[k]) && (/[A-Z0-9]/.test(ch) || ch===first[k])));
+        const positions=[...first].flatMap((ch,k)=>candidates.some(g=>g.text[k]!==ch)?[k]:[]);
+        if(!positions.length || positions.length>3 || positions.some(k=>new Set(candidates.map(g=>/[0-9]/.test(g.text[k])?'digit':'letter')).size>1))return null;
+        return {candidates,positions,normalize};
+    }
+    function reconcilePhotoGlyphs(plan,readings) {
+        if(!plan)return null;
+        const resolved=new Map();
+        for(const at of plan.positions){
+            const chars=new Map(),pixels=new Map();
+            for(const r of readings.filter(r=>r.at===at)){
+                if(!/^[A-Z0-9]$/.test(r.raw) || !r.words.length || r.words.some(w=>!Number.isFinite(w.conf) || w.conf<0))continue;
+                const score=r.words.reduce((n,w)=>n+w.conf*w.text.length,0)/r.words.reduce((n,w)=>n+w.text.length,0);
+                // Contradictory results for identical pixels cannot be votes.
+                if(pixels.has(r.key) && pixels.get(r.key)!==r.raw)return null;
+                pixels.set(r.key,r.raw);
+                if(!chars.has(r.raw))chars.set(r.raw,new Map());
+                const entries=chars.get(r.raw),old=entries.get(r.key);
+                if(!old || score>old.score)entries.set(r.key,{...r,score});
+            }
+            const supported=[...chars].filter(([ch,entries])=>plan.candidates.some(g=>g.text[at]===ch) && entries.size>=3 && new Set([...entries.values()].map(r=>r.kind)).size>=2 && [...entries.values()].some(r=>r.score>=65));
+            if(supported.length!==1)return null;
+            const ch=supported[0][0];
+            if([...chars].some(([other,entries])=>other!==ch && (entries.size>=2 || [...entries.values()].some(r=>r.score>=60))))return null;
+            resolved.set(at,ch);
+        }
+        const survivors=plan.candidates.filter(g=>[...resolved].every(([at,ch])=>g.text[at]===ch));
+        return survivors.length===1?survivors[0].best:null;
+    }
+    async function recognizePhotoGlyphs(canvas,bounds,families,field,options,worker,makeCanvas,progress=()=>{}) {
+        const plan=photoGlyphPlan(families,field,options);
+        if(!plan)return null;
+        const readings=[],cache=new Map(),whitelist=['date','ship','bl'].includes(field)?'0123456789.,-/':'';
+        const read=async(image,psm,chars,output)=>{
+            const key=await photoCellPixelKey(image),variant=JSON.stringify([key,psm,chars,output]);
+            if(!cache.has(variant)){
+                progress();await worker.setParameters({tessedit_pageseg_mode:String(psm),tessedit_char_whitelist:chars,preserve_interword_spaces:'1'});
+                cache.set(variant,await worker.recognize(image,{},output));
+            }
+            return {key,data:cache.get(variant).data};
+        };
+        for(const kind of ['gaussian','median'])for(const strength of [1,2]){
+            const source=nativePhotoCell(canvas,bounds,makeCanvas,kind,strength),image=preparePhotoCell(source,{left:0,right:source.width,top:0,bottom:source.height},makeCanvas,80,false,150,false,true,'gray');
+            const result=await read(image,7,whitelist,{tsv:true,box:true});
+            const raw=tsvWords(result.data.tsv || '').sort((a,b)=>a.x-b.x).map(w=>w.text).join(' '),text=plan.normalize(raw);
+            if(!plan.candidates.some(g=>g.text===text))continue;
+            const boxes=(result.data.box || '').trim().split(/\r?\n/).map(line=>{
+                const a=line.trim().split(/\s+/);return {text:a[0],left:+a[1],top:image.height-(+a[4]),right:+a[3],bottom:image.height-(+a[2])};
+            }).filter(b=>b.text && !/\s/.test(b.text));
+            if(boxes.length!==text.length || plan.normalize(boxes.map(b=>b.text).join(''))!==text || boxes.some(b=>![b.left,b.right,b.top,b.bottom].every(Number.isFinite) || b.left<0 || b.top<0 || b.right>image.width || b.bottom>image.height || b.right<=b.left || b.bottom<=b.top))continue;
+            for(const at of plan.positions)for(const pad of [2,4]){
+                const b=boxes[at],crop={left:Math.max(0,b.left-pad),right:Math.min(image.width,b.right+pad),top:Math.max(0,b.top-pad),bottom:Math.min(image.height,b.bottom+pad)};
+                const imageGlyph=preparePhotoCell(image,crop,makeCanvas,pad===2?60:90,false,150,false,false,'gray');
+                const result=await read(imageGlyph,10,whitelist?'0123456789':'',{tsv:true}),words=tsvWords(result.data.tsv || '');
+                readings.push({at,key:result.key,kind,words,raw:words.map(w=>w.text).join('').toUpperCase()});
+            }
+        }
+        return reconcilePhotoGlyphs(plan,readings);
+    }
     async function recognizePhotoCells(canvas, settings, rowBands, worker, makeCanvas, progress=()=>{}) {
-        const rows=[],sourcePixels=canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height);
+        const rows=[],pendingGlyphs=[],sourcePixels=canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height);
         await worker.setParameters({tessedit_pageseg_mode:'7',preserve_interword_spaces:'1'});
         for(let i=0;i<rowBands.length;i++){
             const row={warnings:[],raw:{},ocrReliable:{},manualExclude:false,reason:'',sourceRow:i+1};
@@ -737,7 +806,7 @@
                     const reading={variant,treatment,words,raw:words.map(w=>w.text).join(' ').replace(['ship','bl'].includes(f)?/\s*([.,])\s*/g:/$^/g,'$1')};readCache.set(variant,reading);return reading;
                 };
                 const primary=await read(f==='cargo'?100:60,f==='port'?false:settings.options.cellBinarize,150);
-                let {words,raw}=primary,accepted=false;
+                let {words,raw}=primary,accepted=false,cellFamilies;
                 {
                     const readings=[primary],variants=settings.options.cellBinarize?[[80,false,150],[140,false,150],[140,true,150],[100,true,170],[100,true,130],[100,false,150],[60,true,150],[160,false,150,true],[160,true,150,true],[140,true,150,false,6],[200,false,150,false,6]]:[[140,false,150],[80,false,150],[60,false,150],[160,false,150,true],[140,false,150,false,6]];
                     if(['ship','bl','date'].includes(f))variants.unshift([80,false,150,false,7,true,'content','max'],[100,false,150,false,7,true,'content','max']);
@@ -746,6 +815,7 @@
                     variants.push([100,false,150,false,7,false,2,'max'],[80,false,150,false,7,false,2,'max'],[100,true,170,false,7,false,2,'max'],[140,true,170,false,7,false,2,'max']);
                     variants.push([100,false,150,false,7,false,'content','max',1.15],[80,false,150,false,7,false,'content','max',1.15],[100,true,150,false,7,false,'content','max',1.15],[80,true,150,false,7,false,'content','max',1.15],[100,false,150,false,6,false,'content','max'],[100,true,150,false,6,false,'content','max']);
                     variants.unshift([100,false,150,false,7,true,2,'max',1,'smooth'],[140,false,150,false,7,true,2,'max',1,'smooth'],[100,false,150,false,7,false,'content','max',1,true],[100,false,150,false,7,true,'content','max',1,true]);
+                    cellFamilies=[readings];
                     // Try content crops first: they remove border noise without extra row OCR.
                     variants.sort((a,b)=>(a[6]==='content'?0:a[6]?1:2)-(b[6]==='content'?0:b[6]?1:2));
                     for(const [size,binary,cutoff,sharpen,psm,verification,margin,channel,stretch,adaptive] of variants.slice(0,34)){
@@ -756,7 +826,7 @@
                     if(settings.options.cellBinarize){
                         const legacy=photoCellConsensus(readings,f,settings.options);
                         const stable=legacy && legacy.score>=90 && legacy.words.every(w=>w.conf>=60);
-                        const families=[readings],nativeCache=new Map();
+                        const families=[readings],nativeCache=new Map();cellFamilies=families;
                         for(const kind of (stable?[]:['gaussian','median','content','binary'])){
                             const family=[];
                             for(const strength of [1,2]){
@@ -792,6 +862,7 @@
                         if(agreed){words=agreed.words;raw=agreed.raw;accepted=true;}
                     }
                 }
+                if(!accepted)pendingGlyphs.push({row,field:f,bounds:{...bounds},families:cellFamilies,index:i});
                 row.raw[f]=raw;row.ocrReliable[f]=accepted;
                 row[f]=!row.ocrReliable[f]?'':['ship','bl'].includes(f)?quantity(raw,settings.options.numberMode):photoCellValue(raw,f,settings.options);
                 if(accepted && !reliable({words,raw}))row.warnings.push(labels[fields.indexOf(f)]+': accepted by concordant cell OCR; verify value.');
@@ -808,9 +879,18 @@
                 if(row[f])row.warnings=row.warnings.filter(w=>!w.startsWith(labels[fields.indexOf(f)]+':'));
             }
         }
+        for(const cell of pendingGlyphs){
+            if(cell.row[cell.field])continue;
+            const value=await recognizePhotoGlyphs(canvas,cell.bounds,cell.families,cell.field,{...settings.options,numberMode:rows.numberMode},worker,makeCanvas,()=>progress(cell.index+1,rowBands.length,cell.field));
+            if(!value)continue;
+            cell.row[cell.field]=value.value;cell.row.raw[cell.field]=value.raw;cell.row.ocrReliable[cell.field]=true;
+            // Preserve the original ambiguity warning and require review of
+            // every glyph recovery, even if the isolated character was strong.
+            cell.row.warnings.push(labels[fields.indexOf(cell.field)]+': recovered by local glyph verification; inspect original before import.');
+        }
         return rows;
     }
-    const api = { photoCellPixelKey, cleanPhotoCellEdges, recognizePhotoCellEdges, photoCellEvidenceGroups, reconcilePhotoCellEvidence, nativePhotoCell, photoFamilyConsensus, smoothPhotoCell, photoRowCellRegions, photoCellValue, photoCellConsensus, adaptivePhotoCell, photoHeaderCells, portReadingConsensus, quantity, date, parse, removeTableRules, recognizeColumns, tsvWords, detectPhotoTable, detectPhotoColumns, detectPhotoRows, refinePhotoCellColumns, fitPhotoCellBounds, preparePhotoCell, photoCellContentBounds, inferPhotoNumberMode, recognizePhotoCells };
+    const api = { photoGlyphPlan, reconcilePhotoGlyphs, recognizePhotoGlyphs, photoCellPixelKey, cleanPhotoCellEdges, recognizePhotoCellEdges, photoCellEvidenceGroups, reconcilePhotoCellEvidence, nativePhotoCell, photoFamilyConsensus, smoothPhotoCell, photoRowCellRegions, photoCellValue, photoCellConsensus, adaptivePhotoCell, photoHeaderCells, portReadingConsensus, quantity, date, parse, removeTableRules, recognizeColumns, tsvWords, detectPhotoTable, detectPhotoColumns, detectPhotoRows, refinePhotoCellColumns, fitPhotoCellBounds, preparePhotoCell, photoCellContentBounds, inferPhotoNumberMode, recognizePhotoCells };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     root.VEFPhotoImport = api;
     if (typeof document === 'undefined') return;
