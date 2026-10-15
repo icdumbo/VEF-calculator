@@ -50,6 +50,9 @@ public final class TableParser {
             if(b.top>=a.bottom&&b.top-a.bottom<height*1.5f&&Math.abs(a.x()-b.x())<Math.max(a.right-a.left,b.right-b.left)*.5f&&header(a.text+b.text)>=0)
                 candidates.add(new Token(a.text+" "+b.text,Math.min(a.left,b.left),a.top,Math.max(a.right,b.right),b.bottom,Math.min(a.confidence,b.confidence)));
         }
+        List<Token> namedHeaders=new ArrayList<>();
+        for(Token t:candidates)if(header(t.text)>=0&&Float.isFinite(t.confidence)&&t.confidence>=.80f)namedHeaders.add(t);
+        candidates=namedHeaders;
         // Select a complete header band, not isolated DATE words from unrelated page content.
         for(Token seed:candidates){
             Token[] trial=new Token[COLS];
