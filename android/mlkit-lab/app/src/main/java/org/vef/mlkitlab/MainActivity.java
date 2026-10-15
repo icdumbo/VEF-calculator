@@ -4,7 +4,7 @@ import android.app.*;
 import android.os.*;
 import android.content.*;
 import android.graphics.*;
-import android.media.ExifInterface;
+import androidx.exifinterface.media.ExifInterface;
 import android.net.Uri;
 import android.provider.MediaStore;
 import android.view.*;
@@ -42,7 +42,7 @@ public final class MainActivity extends Activity {
 
     @Override public void onCreate(Bundle state){
         super.onCreate(state);
-        LinearLayout content=new LinearLayout(this);content.setOrientation(1);content.setPadding(20,20,20,20);
+        LinearLayout content=new LinearLayout(this);content.setOrientation(LinearLayout.VERTICAL);content.setPadding(20,20,20,20);
         ScrollView scroll=new ScrollView(this);scroll.setFillViewport(true);scroll.addView(content);setContentView(scroll);
         // Keep controls clear of system bars on Android 15/16 edge-to-edge windows.
         content.setOnApplyWindowInsetsListener((v,i)->{if(Build.VERSION.SDK_INT>=30){android.graphics.Insets b=i.getInsets(WindowInsets.Type.systemBars());v.setPadding(20+b.left,20+b.top,20+b.right,20+b.bottom);}else v.setPadding(20+i.getSystemWindowInsetLeft(),20+i.getSystemWindowInsetTop(),20+i.getSystemWindowInsetRight(),20+i.getSystemWindowInsetBottom());return i;});
@@ -56,7 +56,7 @@ public final class MainActivity extends Activity {
         button(content,"Open original photo",v->{if(selected!=null)try{startActivity(new Intent(Intent.ACTION_VIEW).setDataAndType(selected,"image/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION));}catch(Exception e){message("No image viewer available.");}});
         metrics=new TextView(this);content.addView(metrics);
         export=button(content,"Export local test report (JSON)",v->export());export.setEnabled(false);
-        rows=new LinearLayout(this);rows.setOrientation(1);content.addView(rows);
+        rows=new LinearLayout(this);rows.setOrientation(LinearLayout.VERTICAL);content.addView(rows);
         if(state!=null){String s=state.getString("selected"),c=state.getString("capture");if(s!=null)selected=Uri.parse(s);if(c!=null)capture=Uri.parse(c);status.setText("Session restored. Rerun OCR; unsaved review edits are not retained.");}
     }
     private Button button(LinearLayout parent,String label,View.OnClickListener action){Button b=new Button(this);b.setText(label);b.setOnClickListener(action);parent.addView(b);return b;}
@@ -129,16 +129,20 @@ public final class MainActivity extends Activity {
     private void render(){
         rows.removeAllViews();
         TextView instructions=new TextView(this);instructions.setText("Frozen OCR reading is shown above each editable inspector value. Correct the values from the original, then confirm each row. A blank OCR reading always counts as blank. Only confirmed rows are scored; edits never change the OCR baseline.");rows.addView(instructions);
+        HorizontalScrollView horizontal=new HorizontalScrollView(this);TableLayout table=new TableLayout(this);horizontal.addView(table);rows.addView(horizontal);
+        TableRow header=new TableRow(this);TextView number=new TextView(this);number.setText("Row");header.addView(number);for(String label:TableParser.LABELS){TextView name=new TextView(this);name.setText(label);name.setTextSize(18);header.addView(name,new TableRow.LayoutParams(dp(240),-2));}TextView review=new TextView(this);review.setText("Inspector confirmation");header.addView(review);table.addView(header);
         for(int r=0;r<20;r++){
-            final int row=r;TextView heading=new TextView(this);heading.setText("Row "+(r+1));heading.setTextSize(20);rows.addView(heading);
+            final int row=r;TableRow visualRow=new TableRow(this);visualRow.setPadding(0,12,0,12);TextView heading=new TextView(this);heading.setText(String.valueOf(r+1));heading.setTextSize(20);visualRow.addView(heading);
             for(int c=0;c<5;c++){
-                TextView prediction=new TextView(this);String p=result.cells[r][c];prediction.setText(TableParser.LABELS[c]+" · OCR: "+(p.isEmpty()?"[blank — review required]":p+" [unconfirmed]"));prediction.setBackgroundColor(0xffffedb0);rows.addView(prediction);
-                EditText value=new EditText(this);value.setSingleLine(true);value.setText(p);value.setHint("Inspector reference: "+TableParser.LABELS[c]);value.setContentDescription("Row "+(r+1)+" "+TableParser.LABELS[c]+" inspector reference");rows.addView(value);reference[r][c]=value;
+                LinearLayout cell=new LinearLayout(this);cell.setOrientation(LinearLayout.VERTICAL);cell.setPadding(8,0,8,0);visualRow.addView(cell,new TableRow.LayoutParams(dp(240),-2));
+                TextView prediction=new TextView(this);String p=result.cells[r][c];prediction.setText("OCR: "+(p.isEmpty()?"[blank — review required]":p+" [unconfirmed]"));prediction.setBackgroundColor(0xffffedb0);cell.addView(prediction);
+                EditText value=new EditText(this);value.setSingleLine(true);value.setText(p);value.setHint("Inspector reference");value.setContentDescription("Row "+(r+1)+" "+TableParser.LABELS[c]+" inspector reference");cell.addView(value);reference[r][c]=value;
                 value.addTextChangedListener(new android.text.TextWatcher(){public void beforeTextChanged(CharSequence s,int st,int count,int after){}public void onTextChanged(CharSequence s,int st,int before,int count){if(confirmed[row]!=null)confirmed[row].setChecked(false);updateMetrics();}public void afterTextChanged(android.text.Editable e){}});
             }
-            CheckBox check=new CheckBox(this);check.setText("I checked all five reference cells against the original");confirmed[r]=check;rows.addView(check);check.setOnCheckedChangeListener((b,v)->updateMetrics());
+            CheckBox check=new CheckBox(this);check.setText("I checked all five reference cells against the original");confirmed[r]=check;visualRow.addView(check,new TableRow.LayoutParams(dp(240),-2));check.setOnCheckedChangeListener((b,v)->updateMetrics());table.addView(visualRow);
         }
     }
+    private int dp(int value){return Math.round(value*getResources().getDisplayMetrics().density);}
     private boolean[] confirmations(){boolean[] c=new boolean[20];for(int r=0;r<20;r++)c[r]=confirmed[r]!=null&&confirmed[r].isChecked();return c;}
     private String[][] references(){String[][] ref=new String[20][5];for(int r=0;r<20;r++)for(int c=0;c<5;c++)ref[r][c]=reference[r][c]==null?"":reference[r][c].getText().toString();return ref;}
     private void updateMetrics(){if(result==null)return;int[] n=TableParser.score(result.cells,references(),confirmations());metrics.setText(String.format(Locale.ROOT,"Decode %.0f ms · ML Kit %.0f ms (1 call) · table %.0f ms\nSource %d×%d · OCR %d×%d\nCorrect %d · wrong %d · blank %d · unreviewed %d / 100\nExact text comparison after trimming outer spaces; no accuracy claim before inspector confirmation.",decodeMs,ocrMs,parseMs,sourceWidth,sourceHeight,imageWidth,imageHeight,n[0],n[1],n[2],n[3]));}
