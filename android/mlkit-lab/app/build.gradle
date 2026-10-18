@@ -16,7 +16,7 @@ def recover = tasks.register('recoverDiagnostic', JavaExec) {
     def original = rootProject.file('recovery/diagnostic-022-before.jar')
     inputs.file original
     outputs.file recoveredJar
-    args original.absolutePath, recoveredJar.get().asFile.absolutePath, '--fix-parser'
+    args original.absolutePath, recoveredJar.get().asFile.absolutePath, '--fix-headers'
     doFirst { recoveredJar.get().asFile.parentFile.mkdirs() }
 }
 
@@ -27,8 +27,8 @@ android {
         applicationId 'org.vef.mlkitlab.diagnostic'
         minSdk 26
         targetSdk 36
-        versionCode 6
-        versionName '0.2.2-diagnostic-parserfix1'
+        versionCode 7
+        versionName '0.2.2-diagnostic-headerfix1'
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
@@ -44,6 +44,9 @@ android {
         workingDir rootProject.projectDir
         systemProperty 'mlkit.report', System.getenv('MLKIT_REPORT') ?: ''
         systemProperty 'mlkit.fold.report', System.getenv('MLKIT_FOLD_REPORT') ?: ''
+        systemProperty 'mlkit.clear.report', System.getenv('MLKIT_CLEAR_REPORT') ?: ''
+        systemProperty 'mlkit.clear.oracle', System.getenv('MLKIT_CLEAR_ORACLE') ?: ''
+        systemProperty 'mlkit.clear.comparison', System.getenv('MLKIT_CLEAR_COMPARISON') ?: ''
         testLogging { showStandardStreams = true; events 'passed', 'skipped', 'failed' }
     }
     signingConfigs { debug { storeFile rootProject.file('.local-signing/debug.jks') } }

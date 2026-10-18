@@ -54,7 +54,8 @@ public final class RecoverDiagnostic {
     }
   }
   public static void main(String[] args)throws Exception{
-    boolean parserFix=args.length==3&&args[2].equals("--fix-parser");
+    boolean headerFix=args.length==3&&args[2].equals("--fix-headers");
+    boolean parserFix=args.length==3&&(args[2].equals("--fix-parser")||headerFix);
     boolean fix=args.length==3&&(args[2].equals("--fix-initialization")||parserFix);
     int patched=0,classes=0,methods=0;
     try(ZipFile z=new ZipFile(args[0]);ZipOutputStream out=new ZipOutputStream(Files.newOutputStream(Path.of(args[1])))){
@@ -98,7 +99,19 @@ public final class RecoverDiagnostic {
               }
               if(calls!=1)throw new IllegalStateException("Expected one service parser call");
             }
-            if(c.name.equals("org/vef/mlkitlab/TableParser")) instrumentParser(m);
+            if(c.name.equals("org/vef/mlkitlab/TableParser")) {
+              instrumentParser(m);
+              if(headerFix&&m.name.equals("parse")) {
+                int rewritten=0;
+                for(AbstractInsnNode n:m.instructions)if(n instanceof MethodInsnNode){MethodInsnNode call=(MethodInsnNode)n;
+                  if(call.owner.equals(c.name)&&call.name.equals("headerCandidates")){call.owner="org/vef/mlkitlab/HeaderRuntime";rewritten++;}
+                }
+                if(rewritten!=1)throw new IllegalStateException("Expected one header discovery call");
+                for(AbstractInsnNode n:m.instructions.toArray())if(n.getOpcode()==Opcodes.ARETURN){
+                  InsnList mark=new InsnList();mark.add(new InsnNode(Opcodes.DUP));mark.add(new MethodInsnNode(Opcodes.INVOKESTATIC,"org/vef/mlkitlab/HeaderRuntime","annotate","(Lorg/vef/mlkitlab/TableParser$Result;)V",false));m.instructions.insertBefore(n,mark);
+                }
+              }
+            }
             before.put(m.name+m.desc,instructions(m));
           }
           methods++;
@@ -109,6 +122,18 @@ public final class RecoverDiagnostic {
           MethodNode copy=new MethodNode(Opcodes.ACC_PUBLIC|Opcodes.ACC_STATIC,"diagnosticBounds",bounds.desc,null,null);
           bounds.accept(copy);copy.name="diagnosticBounds";copy.access=Opcodes.ACC_PUBLIC|Opcodes.ACC_STATIC;
           c.methods.add(copy);before.put(copy.name+copy.desc,instructions(copy));
+        }
+        if(headerFix&&c.name.equals("org/vef/mlkitlab/TableParser")) {
+          for(String name:Arrays.asList("headerCandidates","dateColumn")) {
+            MethodNode source=null;for(MethodNode m:c.methods)if(m.name.equals(name))source=m;
+            if(source==null)throw new IllegalStateException("Missing original "+name);
+            MethodNode copy=new MethodNode(Opcodes.ACC_PUBLIC|Opcodes.ACC_STATIC,"diagnostic"+Character.toUpperCase(name.charAt(0))+name.substring(1),source.desc,null,null);
+            source.accept(copy);copy.name="diagnostic"+Character.toUpperCase(name.charAt(0))+name.substring(1);copy.access=Opcodes.ACC_PUBLIC|Opcodes.ACC_STATIC;
+            c.methods.add(copy);before.put(copy.name+copy.desc,instructions(copy));
+          }
+          MethodNode head=new MethodNode(Opcodes.ACC_PUBLIC|Opcodes.ACC_STATIC,"diagnosticHead","(ILjava/util/List;)Ljava/lang/Object;",null,null);
+          head.instructions.add(new TypeInsnNode(Opcodes.NEW,"org/vef/mlkitlab/TableParser$Head"));head.instructions.add(new InsnNode(Opcodes.DUP));head.instructions.add(new VarInsnNode(Opcodes.ILOAD,0));head.instructions.add(new VarInsnNode(Opcodes.ALOAD,1));head.instructions.add(new MethodInsnNode(Opcodes.INVOKESPECIAL,"org/vef/mlkitlab/TableParser$Head","<init>","(ILjava/util/List;)V",false));head.instructions.add(new InsnNode(Opcodes.ARETURN));
+          c.methods.add(head);before.put(head.name+head.desc,instructions(head));
         }
         c.version=Math.max(c.version,Opcodes.V1_8);
         ClassWriter w=new ClassWriter(ClassWriter.COMPUTE_FRAMES|ClassWriter.COMPUTE_MAXS){@Override protected String getCommonSuperClass(String a,String b){try{return super.getCommonSuperClass(a,b);}catch(Throwable ignored){return "java/lang/Object";}}};
