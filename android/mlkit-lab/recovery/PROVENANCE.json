@@ -1,0 +1,13 @@
+{
+  "source": "User-owned VEF ML Kit Lab 0.2.2 diagnostic APK previously delivered and tested on Galaxy Fold",
+  "apk_sha256": "0d4e5675d02c940f7e0cfa17b6212828d180add1af7f42f1decd28566c2450fa",
+  "dex2jar_version": "2.4",
+  "asm_version": "9.5",
+  "jdk": "17",
+  "recovered_classes": 41,
+  "recovered_methods": 213,
+  "normalized_original_jar_sha256": "674169a41d68cfbb7e3fad97ebee32866a74b6af552c32d4ac184b504fb1248f",
+  "change": "Move the existing ALOAD 0 / getApplicationContext / MlKit.initialize sequence in OcrDiagnosticService.process to immediately before InputImage.fromBitmap. No new initialization call, no parser edits.",
+  "reference_sources": "JADX 1.5.2 output for inspection only; not original source and not compiled.",
+  "recovery_limits": "Original 0.2.2 Java sources were not present in GitHub, Codespace or current transient workspace. Executable classes recovered instead of guessing parser/control-flow reconstruction."
+}

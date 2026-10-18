@@ -1,25 +1,81 @@
 plugins { id 'com.android.application' }
+
+configurations { recoveryTool; baseline01 }
+def recoveredJar = layout.buildDirectory.file('generated/recovery/diagnostic-022-initialized.jar')
+def recoveryClasses = layout.buildDirectory.dir('recovery-tool')
+def compileRecovery = tasks.register('compileRecoveryTool', JavaCompile) {
+    source rootProject.file('recovery/RecoverDiagnostic.java')
+    classpath = configurations.recoveryTool
+    destinationDirectory = recoveryClasses
+    options.release = 17
+}
+def recover = tasks.register('recoverDiagnostic', JavaExec) {
+    dependsOn compileRecovery
+    classpath = files(recoveryClasses) + configurations.recoveryTool
+    mainClass = 'RecoverDiagnostic'
+    def original = rootProject.file('recovery/diagnostic-022-before.jar')
+    inputs.file original
+    outputs.file recoveredJar
+    args original.absolutePath, recoveredJar.get().asFile.absolutePath, '--fix-initialization'
+    doFirst { recoveredJar.get().asFile.parentFile.mkdirs() }
+}
+
 android {
     namespace 'org.vef.mlkitlab'
     compileSdk 36
     defaultConfig {
-        applicationId 'org.vef.mlkitlab'
+        applicationId 'org.vef.mlkitlab.diagnostic'
         minSdk 26
         targetSdk 36
-        versionCode 1
-        versionName '0.1'
+        versionCode 5
+        versionName '0.2.2-diagnostic-initfix1'
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
+    // The 0.1 sources remain available as historical source, not as the
+    // implementation of the recovered 0.2.2 diagnostic APK.
+    sourceSets {
+        main.java.srcDirs = []
+        test.java.srcDirs = ['src/diagnosticTest/java']
+    }
+    testOptions.unitTests.all {
+        workingDir rootProject.projectDir
+        systemProperty 'mlkit.report', System.getenv('MLKIT_REPORT') ?: ''
+        testLogging { showStandardStreams = true; events 'passed', 'skipped', 'failed' }
+    }
     signingConfigs { debug { storeFile rootProject.file('.local-signing/debug.jks') } }
     buildTypes { debug { debuggable true }; release { minifyEnabled false } }
 }
+
 dependencies {
+    implementation files(recoveredJar).builtBy(recover)
     implementation platform('org.jetbrains.kotlin:kotlin-bom:1.8.22')
     implementation 'com.google.mlkit:text-recognition:16.0.1'
     implementation 'androidx.core:core:1.13.1'
     implementation 'androidx.exifinterface:exifinterface:1.4.2'
+    recoveryTool 'org.ow2.asm:asm:9.5'
+    recoveryTool 'org.ow2.asm:asm-tree:9.5'
+    baseline01 'junit:junit:4.13.2'
     testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.ow2.asm:asm:9.5'
+    testImplementation 'org.ow2.asm:asm-tree:9.5'
+    testImplementation 'org.json:json:20240303'
+}
+
+// Run all original 0.1 tests separately against the original 0.1 parser.
+// Their global-blank expectations do not describe the recovered 0.2.1 parser.
+def baselineClasses = layout.buildDirectory.dir('baseline01-tests')
+def baselineCompile = tasks.register('compileBaseline01Tests', JavaCompile) {
+    source files('src/main/java/org/vef/mlkitlab/TableParser.java', 'src/test/java/org/vef/mlkitlab/TableParserTest.java')
+    classpath = configurations.baseline01
+    destinationDirectory = baselineClasses
+    options.release = 17
+}
+tasks.register('testBaseline01', Test) {
+    dependsOn baselineCompile
+    testClassesDirs = files(baselineClasses)
+    classpath = files(baselineClasses) + configurations.baseline01
+    testLogging { events 'passed', 'skipped', 'failed' }
 }

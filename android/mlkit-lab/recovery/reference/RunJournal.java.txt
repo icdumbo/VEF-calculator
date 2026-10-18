@@ -1,0 +1,183 @@
+package org.vef.mlkitlab;
+
+import androidx.core.view.MotionEventCompat;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.util.LinkedHashMap;
+import java.util.Locale;
+import java.util.Map;
+import java.util.StringJoiner;
+import java.util.function.BiFunction;
+import java.util.function.LongSupplier;
+import kotlin.text.Typography;
+import kotlinx.coroutines.debug.internal.DebugCoroutineInfoImplKt;
+
+/* loaded from: classes3.dex */
+public final class RunJournal {
+    public static final long TOTAL_LIMIT_MS = 15000;
+    private final LongSupplier clock;
+    private final Map<String, Long> durations;
+    private final File file;
+    private String outcome;
+    private long sequence;
+    private String stage;
+    private long stageLimit;
+    private long stageStarted;
+    private final long started;
+
+    public RunJournal(File file) throws IOException {
+        this(file, new LongSupplier() { // from class: org.vef.mlkitlab.RunJournal$$ExternalSyntheticLambda1
+            @Override // java.util.function.LongSupplier
+            public final long getAsLong() {
+                return RunJournal.lambda$new$0();
+            }
+        });
+    }
+
+    static /* synthetic */ long lambda$new$0() {
+        return System.nanoTime() / 1000000;
+    }
+
+    RunJournal(File file, LongSupplier clock) throws IOException {
+        this.stage = "STARTING";
+        this.outcome = DebugCoroutineInfoImplKt.RUNNING;
+        this.durations = new LinkedHashMap();
+        this.file = file;
+        this.clock = clock;
+        this.started = clock.getAsLong();
+        this.stageStarted = this.started;
+        record("RUN_START", "totalDeadlineMs=15000");
+    }
+
+    public synchronized void begin(String name, long limitMs) throws IOException {
+        if (!this.outcome.equals(DebugCoroutineInfoImplKt.RUNNING)) {
+            throw new IllegalStateException("Run already stopped");
+        }
+        this.stage = name;
+        this.stageStarted = this.clock.getAsLong();
+        this.stageLimit = limitMs;
+        record("STAGE_BEGIN", "limitMs=" + limitMs);
+    }
+
+    public synchronized void end(String detail) throws IOException {
+        long elapsed = Math.max(0L, this.clock.getAsLong() - this.stageStarted);
+        this.durations.merge(this.stage, Long.valueOf(elapsed), new BiFunction() { // from class: org.vef.mlkitlab.RunJournal$$ExternalSyntheticLambda0
+            @Override // java.util.function.BiFunction
+            public final Object apply(Object obj, Object obj2) {
+                return Long.valueOf(Long.sum(((Long) obj).longValue(), ((Long) obj2).longValue()));
+            }
+        });
+        record("STAGE_END", detail);
+    }
+
+    public synchronized void event(String kind, String detail) throws IOException {
+        record(kind, detail);
+    }
+
+    public synchronized String deadlineReason() {
+        if (!this.outcome.equals(DebugCoroutineInfoImplKt.RUNNING)) {
+            return "";
+        }
+        long now = this.clock.getAsLong();
+        if (now - this.started >= TOTAL_LIMIT_MS) {
+            return "TOTAL_TIMEOUT at " + this.stage;
+        }
+        if (this.stageLimit <= 0 || now - this.stageStarted < this.stageLimit) {
+            return "";
+        }
+        return "STAGE_TIMEOUT at " + this.stage;
+    }
+
+    public synchronized boolean running() {
+        return this.outcome.equals(DebugCoroutineInfoImplKt.RUNNING);
+    }
+
+    public synchronized String stage() {
+        return this.stage;
+    }
+
+    public synchronized long elapsed() {
+        return Math.max(0L, this.clock.getAsLong() - this.started);
+    }
+
+    public synchronized void stop(String reason) throws IOException {
+        if (this.outcome.equals(DebugCoroutineInfoImplKt.RUNNING)) {
+            this.outcome = reason;
+            record("RUN_STOP", reason);
+        }
+    }
+
+    public synchronized String snapshot() {
+        return "{\"stage\":" + quote(this.stage) + ",\"outcome\":" + quote(this.outcome) + ",\"totalMs\":" + elapsed() + ",\"stageMs\":" + Math.max(0L, this.clock.getAsLong() - this.stageStarted) + ",\"totalLimitMs\":" + TOTAL_LIMIT_MS + ",\"completedStageMs\":" + durationJson() + "}";
+    }
+
+    private String durationJson() {
+        StringJoiner s = new StringJoiner(",", "{", "}");
+        for (Map.Entry<String, Long> e : this.durations.entrySet()) {
+            s.add(quote(e.getKey()) + ":" + e.getValue());
+        }
+        return s.toString();
+    }
+
+    private void record(String event, String detail) throws IOException {
+        StringBuilder sbAppend = new StringBuilder().append("{\"sequence\":");
+        long j = this.sequence + 1;
+        this.sequence = j;
+        String line = sbAppend.append(j).append(",\"event\":").append(quote(event)).append(",\"detail\":").append(quote(detail)).append(",\"wallUtc\":").append(quote(Instant.now().toString())).append(",\"state\":").append(snapshot()).append("}\n").toString();
+        FileOutputStream out = new FileOutputStream(this.file, true);
+        try {
+            out.write(line.getBytes(StandardCharsets.UTF_8));
+            out.getFD().sync();
+            out.close();
+        } catch (Throwable th) {
+            try {
+                out.close();
+            } catch (Throwable th2) {
+                th.addSuppressed(th2);
+            }
+            throw th;
+        }
+    }
+
+    public static String quote(String s) {
+        String str;
+        StringBuilder b = new StringBuilder("\"");
+        for (char c : s.toCharArray()) {
+            switch (c) {
+                case '\t':
+                    str = "\\t";
+                    b.append(str);
+                    break;
+                case '\n':
+                    str = "\\n";
+                    b.append(str);
+                    break;
+                case '\r':
+                    str = "\\r";
+                    b.append(str);
+                    break;
+                case MotionEventCompat.AXIS_GENERIC_3 /* 34 */:
+                    str = "\\\"";
+                    b.append(str);
+                    break;
+                case '\\':
+                    str = "\\\\";
+                    b.append(str);
+                    break;
+                default:
+                    if (c < ' ') {
+                        str = String.format(Locale.ROOT, "\\u%04x", Integer.valueOf(c));
+                        b.append(str);
+                        break;
+                    } else {
+                        b.append(c);
+                        break;
+                    }
+            }
+        }
+        return b.append(Typography.quote).toString();
+    }
+}

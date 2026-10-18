@@ -1,0 +1,688 @@
+package org.vef.mlkitlab;
+
+import android.app.Activity;
+import android.app.ActivityManager;
+import android.content.ClipData;
+import android.content.Intent;
+import android.graphics.Insets;
+import android.net.Uri;
+import android.os.Build;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.Process;
+import android.os.ResultReceiver;
+import android.os.SystemClock;
+import android.view.View;
+import android.view.WindowInsets;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import androidx.core.app.NotificationCompat;
+import androidx.core.content.FileProvider;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FilenameFilter;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.util.Arrays;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Objects;
+import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
+/* loaded from: classes3.dex */
+public final class MainActivity extends Activity {
+    private static final int CAMERA = 11;
+    private static final int EXPORT = 12;
+    private static final int PICK = 10;
+    private boolean active;
+    private Button camera;
+    private Button cancel;
+    private Uri capture;
+    private boolean dead;
+    private Button gallery;
+    private TextView history;
+    private ResultReceiver receiver;
+    private LinearLayout resultRows;
+    private Button run;
+    private Uri selected;
+    private TextView status;
+    private TextView trace;
+    private Runnable uiGuard;
+    private long uiStarted;
+    private int workerPid;
+    private final Handler main = new Handler(Looper.getMainLooper());
+    private final ExecutorService io = Executors.newSingleThreadExecutor();
+    private String activeId = "";
+    private String lastTrace = "";
+
+    @Override // android.app.Activity
+    public void onCreate(Bundle state) {
+        super.onCreate(state);
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(1);
+        content.setPadding(20, 20, 20, 20);
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(content);
+        setContentView(scroll);
+        content.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() { // from class: org.vef.mlkitlab.MainActivity$$ExternalSyntheticLambda0
+            @Override // android.view.View.OnApplyWindowInsetsListener
+            public final WindowInsets onApplyWindowInsets(View view, WindowInsets windowInsets) {
+                return MainActivity.lambda$onCreate$0(view, windowInsets);
+            }
+        });
+        label(content, "VEF ML Kit Lab 0.2.2 · Diagnostic", 22);
+        label(content, "Isolated offline test. A 15-second deadline is a diagnostic limit, not a promise of OCR success. No VEF calculations or automatic approval. Logs survive app restarts.", 16);
+        this.gallery = button(content, "Choose photograph", new View.OnClickListener() { // from class: org.vef.mlkitlab.MainActivity$$ExternalSyntheticLambda10
+            @Override // android.view.View.OnClickListener
+            public final void onClick(View view) {
+                this.f$0.lambda$onCreate$1(view);
+            }
+        });
+        this.camera = button(content, "Camera", new View.OnClickListener() { // from class: org.vef.mlkitlab.MainActivity$$ExternalSyntheticLambda11
+            @Override // android.view.View.OnClickListener
+            public final void onClick(View view) {
+                this.f$0.lambda$onCreate$2(view);
+            }
+        });
+        button(content, "Open original photograph", new View.OnClickListener() { // from class: org.vef.mlkitlab.MainActivity$$ExternalSyntheticLambda12
+            @Override // android.view.View.OnClickListener
+            public final void onClick(View view) {
+                this.f$0.lambda$onCreate$3(view);
+            }
+        });
+        this.run = button(content, "Run diagnostic OCR", new View.OnClickListener() { // from class: org.vef.mlkitlab.MainActivity$$ExternalSyntheticLambda13
+            @Override // android.view.View.OnClickListener
+            public final void onClick(View view) {
+                this.f$0.lambda$onCreate$4(view);
+            }
+        });
+        this.cancel = button(content, "Cancel OCR process", new View.OnClickListener() { // from class: org.vef.mlkitlab.MainActivity$$ExternalSyntheticLambda14
+            @Override // android.view.View.OnClickListener
+            public final void onClick(View view) {
+                this.f$0.lambda$onCreate$5(view);
+            }
+        });
+        this.cancel.setEnabled(false);
+        this.status = label(content, "Choose a photo. This diagnostic app is separate from the calculator and previous lab.", 17);
+        this.trace = label(content, "", 15);
+        button(content, "Export persistent diagnostics (ZIP)", new View.OnClickListener() { // from class: org.vef.mlkitlab.MainActivity$$ExternalSyntheticLambda15
+            @Override // android.view.View.OnClickListener
+            public final void onClick(View view) {
+                this.f$0.lambda$onCreate$6(view);
+            }
+        });
+        button(content, "Refresh saved diagnostic logs", new View.OnClickListener() { // from class: org.vef.mlkitlab.MainActivity$$ExternalSyntheticLambda16
+            @Override // android.view.View.OnClickListener
+            public final void onClick(View view) {
+                this.f$0.lambda$onCreate$7(view);
+            }
+        });
+        this.history = label(content, "Loading saved log status…", 14);
+        this.history.setTextIsSelectable(true);
+        this.resultRows = new LinearLayout(this);
+        this.resultRows.setOrientation(1);
+        content.addView(this.resultRows);
+        if (state != null && state.getString("selected") != null) {
+            this.selected = Uri.parse(state.getString("selected"));
+        }
+        this.receiver = new AnonymousClass1(this.main);
+        loadHistory();
+    }
+
+    static /* synthetic */ WindowInsets lambda$onCreate$0(View v, WindowInsets i) {
+        if (Build.VERSION.SDK_INT >= 30) {
+            Insets b = i.getInsets(WindowInsets.Type.systemBars());
+            v.setPadding(b.left + 20, b.top + 20, b.right + 20, b.bottom + 20);
+        } else {
+            v.setPadding(i.getSystemWindowInsetLeft() + 20, i.getSystemWindowInsetTop() + 20, i.getSystemWindowInsetRight() + 20, i.getSystemWindowInsetBottom() + 20);
+        }
+        return i;
+    }
+
+    /* JADX INFO: Access modifiers changed from: private */
+    public /* synthetic */ void lambda$onCreate$1(View v) {
+        startActivityForResult(new Intent("android.intent.action.OPEN_DOCUMENT").setType("image/*").addCategory("android.intent.category.OPENABLE"), 10);
+    }
+
+    /* JADX INFO: Access modifiers changed from: private */
+    public /* synthetic */ void lambda$onCreate$2(View v) {
+        camera();
+    }
+
+    /* JADX INFO: Access modifiers changed from: private */
+    public /* synthetic */ void lambda$onCreate$3(View v) {
+        if (this.selected != null) {
+            try {
+                startActivity(new Intent("android.intent.action.VIEW").setDataAndType(this.selected, "image/*").addFlags(1));
+            } catch (Exception e) {
+                message("No image viewer available.");
+            }
+        }
+    }
+
+    /* JADX INFO: Access modifiers changed from: private */
+    public /* synthetic */ void lambda$onCreate$4(View v) {
+        start();
+    }
+
+    /* JADX INFO: Access modifiers changed from: private */
+    public /* synthetic */ void lambda$onCreate$5(View v) {
+        cancel();
+    }
+
+    /* JADX INFO: Access modifiers changed from: private */
+    public /* synthetic */ void lambda$onCreate$6(View v) {
+        startActivityForResult(new Intent("android.intent.action.CREATE_DOCUMENT").setType("application/zip").addCategory("android.intent.category.OPENABLE").putExtra("android.intent.extra.TITLE", "vef-mlkit-022-diagnostics.zip"), 12);
+    }
+
+    /* JADX INFO: Access modifiers changed from: private */
+    public /* synthetic */ void lambda$onCreate$7(View v) {
+        loadHistory();
+    }
+
+    /* renamed from: org.vef.mlkitlab.MainActivity$1, reason: invalid class name */
+    class AnonymousClass1 extends ResultReceiver {
+        AnonymousClass1(Handler arg0) {
+            super(arg0);
+        }
+
+        @Override // android.os.ResultReceiver
+        protected void onReceiveResult(int code, Bundle b) {
+            if (MainActivity.this.dead || !Objects.equals(MainActivity.this.activeId, b.getString("runId"))) {
+                return;
+            }
+            if (MainActivity.this.active || !(code == 1 || code == 2)) {
+                MainActivity.this.workerPid = b.getInt("workerPid", MainActivity.this.workerPid);
+                MainActivity.this.lastTrace = b.getString("trace", MainActivity.this.lastTrace);
+                MainActivity.this.message(b.getString("message", ""));
+                MainActivity.this.trace.setText(MainActivity.this.lastTrace);
+                if (code == 2) {
+                    final String name = b.getString("resultFile");
+                    MainActivity.this.io.execute(new Runnable() { // from class: org.vef.mlkitlab.MainActivity$1$$ExternalSyntheticLambda0
+                        @Override // java.lang.Runnable
+                        public final void run() {
+                            this.f$0.lambda$onReceiveResult$2(name);
+                        }
+                    });
+                }
+                if (code == 3 || code == 4) {
+                    MainActivity.this.setBusy(false);
+                    MainActivity.this.loadHistory();
+                }
+            }
+        }
+
+        /* JADX INFO: Access modifiers changed from: private */
+        public /* synthetic */ void lambda$onReceiveResult$0(JSONObject data) throws JSONException {
+            if (!MainActivity.this.active || MainActivity.this.dead) {
+                return;
+            }
+            MainActivity.this.render(data, 0);
+        }
+
+        /* JADX INFO: Access modifiers changed from: private */
+        public /* synthetic */ void lambda$onReceiveResult$1(Exception e) {
+            MainActivity.this.message("Cannot load persisted result: " + e);
+            MainActivity.this.cancel();
+        }
+
+        /* JADX INFO: Access modifiers changed from: private */
+        public /* synthetic */ void lambda$onReceiveResult$2(String name) {
+            try {
+                final JSONObject data = new JSONObject(MainActivity.read(new File(MainActivity.this.logDir(), name)));
+                MainActivity.this.main.post(new Runnable() { // from class: org.vef.mlkitlab.MainActivity$1$$ExternalSyntheticLambda1
+                    @Override // java.lang.Runnable
+                    public final void run() throws JSONException {
+                        this.f$0.lambda$onReceiveResult$0(data);
+                    }
+                });
+            } catch (Exception e) {
+                MainActivity.this.main.post(new Runnable() { // from class: org.vef.mlkitlab.MainActivity$1$$ExternalSyntheticLambda2
+                    @Override // java.lang.Runnable
+                    public final void run() {
+                        this.f$0.lambda$onReceiveResult$1(e);
+                    }
+                });
+            }
+        }
+    }
+
+    private TextView label(LinearLayout parent, String text, int size) {
+        TextView v = new TextView(this);
+        v.setText(text);
+        v.setTextSize(size);
+        parent.addView(v);
+        return v;
+    }
+
+    private Button button(LinearLayout parent, String text, View.OnClickListener listener) {
+        Button b = new Button(this);
+        b.setText(text);
+        b.setOnClickListener(listener);
+        parent.addView(b);
+        return b;
+    }
+
+    /* JADX INFO: Access modifiers changed from: private */
+    public void message(String text) {
+        if (this.dead) {
+            return;
+        }
+        this.status.setText(text);
+    }
+
+    /* JADX INFO: Access modifiers changed from: private */
+    public File logDir() {
+        return new File(getFilesDir(), "diagnostics");
+    }
+
+    /* JADX INFO: Access modifiers changed from: private */
+    public void setBusy(boolean value) {
+        if (!value && this.uiGuard != null) {
+            this.main.removeCallbacks(this.uiGuard);
+        }
+        this.active = value;
+        this.run.setEnabled(!value);
+        this.gallery.setEnabled(!value);
+        this.camera.setEnabled(!value);
+        this.cancel.setEnabled(value);
+    }
+
+    private void start() {
+        if (this.active) {
+            return;
+        }
+        if (this.selected == null) {
+            message("Choose a photo first.");
+            return;
+        }
+        this.workerPid = 0;
+        this.lastTrace = "";
+        this.uiStarted = SystemClock.elapsedRealtime();
+        this.activeId = "run-" + System.currentTimeMillis() + "-" + UUID.randomUUID().toString().substring(0, 8);
+        this.resultRows.removeAllViews();
+        setBusy(true);
+        message("Starting isolated OCR process. Persistent stage logging enabled.");
+        Intent intent = control(OcrDiagnosticService.RUN).putExtra("uri", this.selected).putExtra("receiver", this.receiver);
+        try {
+            startService(intent);
+            scheduleGuard(16000L);
+        } catch (Exception e) {
+            setBusy(false);
+            message("Cannot start OCR diagnostic process: " + e);
+        }
+    }
+
+    /* JADX INFO: Access modifiers changed from: private */
+    public /* synthetic */ void lambda$scheduleGuard$9(final String id) {
+        List<ActivityManager.RunningAppProcessInfo> processes;
+        if (!this.active || !Objects.equals(id, this.activeId)) {
+            return;
+        }
+        final String detail = "UI_GUARD: no terminal worker callback; elapsedMs=" + (SystemClock.elapsedRealtime() - this.uiStarted) + " lastTrace=" + this.lastTrace;
+        int pid = this.workerPid;
+        this.io.execute(new Runnable() { // from class: org.vef.mlkitlab.MainActivity$$ExternalSyntheticLambda4
+            @Override // java.lang.Runnable
+            public final void run() {
+                this.f$0.lambda$scheduleGuard$8(id, detail);
+            }
+        });
+        try {
+            startService(control(OcrDiagnosticService.CANCEL));
+        } catch (Exception e) {
+        }
+        ActivityManager am = (ActivityManager) getSystemService("activity");
+        if (pid > 0 && pid != Process.myPid() && am != null && (processes = am.getRunningAppProcesses()) != null) {
+            for (ActivityManager.RunningAppProcessInfo p : processes) {
+                if (p.pid == pid && p.uid == Process.myUid() && p.processName.equals(getPackageName() + ":ocr_diagnostic")) {
+                    Process.killProcess(pid);
+                }
+            }
+        }
+        setBusy(false);
+        message("Worker callback timeout. The UI remains available. Export persistent diagnostic logs.");
+        loadHistory();
+    }
+
+    private void scheduleGuard(long delay) {
+        if (this.uiGuard != null) {
+            this.main.removeCallbacks(this.uiGuard);
+        }
+        final String id = this.activeId;
+        this.uiGuard = new Runnable() { // from class: org.vef.mlkitlab.MainActivity$$ExternalSyntheticLambda6
+            @Override // java.lang.Runnable
+            public final void run() {
+                this.f$0.lambda$scheduleGuard$9(id);
+            }
+        };
+        this.main.postDelayed(this.uiGuard, delay);
+    }
+
+    /* JADX INFO: Access modifiers changed from: private */
+    public /* synthetic */ void lambda$scheduleGuard$8(String id, String detail) {
+        try {
+            logDir().mkdirs();
+            File f = new File(logDir(), "controller-" + id + ".jsonl");
+            RunJournal j = new RunJournal(f);
+            j.event("CONTROLLER_GUARD", detail);
+            j.stop("WORKER_CALLBACK_MISSING");
+        } catch (Exception e) {
+        }
+    }
+
+    private Intent control(String action) {
+        return new Intent(this, (Class<?>) OcrDiagnosticService.class).setAction(action).putExtra("runId", this.activeId);
+    }
+
+    /* JADX INFO: Access modifiers changed from: private */
+    public void cancel() {
+        if (this.active) {
+            this.cancel.setEnabled(false);
+            message("Cancellation requested. Stopping only the isolated OCR process; logs will remain available.");
+            try {
+                startService(control(OcrDiagnosticService.CANCEL));
+                scheduleGuard(3000L);
+            } catch (Exception e) {
+                setBusy(false);
+                message("Cancellation delivery failed: " + e);
+            }
+        }
+    }
+
+    private void camera() {
+        try {
+            File dir = new File(getCacheDir(), "captures");
+            dir.mkdirs();
+            this.capture = FileProvider.getUriForFile(this, getPackageName() + ".files", File.createTempFile("photo-", ".jpg", dir));
+            Intent i = new Intent("android.media.action.IMAGE_CAPTURE").putExtra("output", this.capture).addFlags(3);
+            i.setClipData(ClipData.newRawUri("capture", this.capture));
+            startActivityForResult(i, 11);
+        } catch (Exception e) {
+            message("Camera unavailable: " + e);
+        }
+    }
+
+    @Override // android.app.Activity
+    protected void onActivityResult(int request, int code, Intent data) {
+        super.onActivityResult(request, code, data);
+        if (code != -1) {
+            return;
+        }
+        if (request == 10 && data != null && data.getData() != null) {
+            this.selected = data.getData();
+            try {
+                getContentResolver().takePersistableUriPermission(this.selected, 1);
+            } catch (Exception e) {
+            }
+            message("Photo selected. Press Run diagnostic OCR.");
+        }
+        if (request == 11 && this.capture != null) {
+            this.selected = this.capture;
+            message("Photo captured. Press Run diagnostic OCR.");
+        }
+        if (request != 12 || data == null || data.getData() == null) {
+            return;
+        }
+        final Uri target = data.getData();
+        this.io.execute(new Runnable() { // from class: org.vef.mlkitlab.MainActivity$$ExternalSyntheticLambda3
+            @Override // java.lang.Runnable
+            public final void run() throws IOException {
+                this.f$0.lambda$onActivityResult$10(target);
+            }
+        });
+    }
+
+    /* JADX INFO: Access modifiers changed from: private */
+    public void render(final JSONObject data, final int index) throws JSONException {
+        String str = "Row ";
+        if (!this.active || this.dead) {
+            return;
+        }
+        try {
+            JSONArray rows = data.getJSONArray("rows");
+            if (index == 0) {
+                this.resultRows.removeAllViews();
+                label(this.resultRows, "Yellow: Review Required. Neutral candidates are also unconfirmed. Inspector edits do not change the frozen OCR log.", 16);
+            }
+            if (index >= rows.length()) {
+                startService(control(OcrDiagnosticService.DISPLAYED));
+                return;
+            }
+            JSONObject row = rows.getJSONObject(index);
+            JSONObject cells = row.getJSONObject("cells");
+            label(this.resultRows, "Row " + row.getInt("row"), 19);
+            String[] strArr = TableParser.LABELS;
+            int length = strArr.length;
+            int i = 0;
+            while (i < length) {
+                String key = strArr[i];
+                JSONObject c = cells.getJSONObject(key);
+                String value = c.getString("value");
+                TextView original = label(this.resultRows, key + " · OCR: " + (value.isEmpty() ? "[blank — Review Required]" : value) + " · " + c.getString("reason"), 15);
+                original.setBackgroundColor("candidate".equals(c.getString(NotificationCompat.CATEGORY_STATUS)) ? -920071 : -4688);
+                EditText edit = new EditText(this);
+                edit.setText(value);
+                edit.setSingleLine(true);
+                edit.setHint("Inspector correction — unconfirmed");
+                edit.setContentDescription(str + (index + 1) + " " + key + " inspector correction");
+                this.resultRows.addView(edit);
+                i++;
+                str = str;
+            }
+            this.main.post(new Runnable() { // from class: org.vef.mlkitlab.MainActivity$$ExternalSyntheticLambda17
+                @Override // java.lang.Runnable
+                public final void run() throws JSONException {
+                    this.f$0.lambda$render$11(data, index);
+                }
+            });
+        } catch (Exception e) {
+            message("Display failed: " + e);
+            cancel();
+        }
+    }
+
+    /* JADX INFO: Access modifiers changed from: private */
+    public /* synthetic */ void lambda$render$11(JSONObject data, int index) throws JSONException {
+        render(data, index + 1);
+    }
+
+    /* JADX INFO: Access modifiers changed from: private */
+    public static String read(File p) throws IOException {
+        InputStream in = new FileInputStream(p);
+        try {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] b = new byte[16384];
+            while (true) {
+                int n = in.read(b);
+                if (n == -1) {
+                    String string = out.toString("UTF-8");
+                    in.close();
+                    return string;
+                }
+                out.write(b, 0, n);
+            }
+        } catch (Throwable th) {
+            try {
+                in.close();
+            } catch (Throwable th2) {
+                th.addSuppressed(th2);
+            }
+            throw th;
+        }
+    }
+
+    /* JADX INFO: Access modifiers changed from: private */
+    public /* synthetic */ void lambda$loadHistory$14() {
+        File[] files = logDir().listFiles(new FilenameFilter() { // from class: org.vef.mlkitlab.MainActivity$$ExternalSyntheticLambda18
+            @Override // java.io.FilenameFilter
+            public final boolean accept(File file, String str) {
+                return str.endsWith(".jsonl");
+            }
+        });
+        String text = "No persisted runs yet.";
+        if (files != null && files.length > 0) {
+            Arrays.sort(files, Comparator.comparing(new MainActivity$$ExternalSyntheticLambda1()));
+            File latest = files[files.length - 1];
+            try {
+                String raw = read(latest);
+                String[] lines = raw.split("\n");
+                text = "Saved runs: " + files.length + "\nLatest log: " + latest.getName() + "\n" + lines[lines.length - 1] + "\nAn unfinished stage after restart indicates interruption, not a confirmed timeout. Export includes raw OCR when extraction finished.";
+            } catch (Exception e) {
+                text = "Cannot read saved log: " + e;
+            }
+        }
+        final String display = text;
+        this.main.post(new Runnable() { // from class: org.vef.mlkitlab.MainActivity$$ExternalSyntheticLambda2
+            @Override // java.lang.Runnable
+            public final void run() {
+                this.f$0.lambda$loadHistory$13(display);
+            }
+        });
+    }
+
+    /* JADX INFO: Access modifiers changed from: private */
+    public void loadHistory() {
+        this.io.execute(new Runnable() { // from class: org.vef.mlkitlab.MainActivity$$ExternalSyntheticLambda5
+            @Override // java.lang.Runnable
+            public final void run() {
+                this.f$0.lambda$loadHistory$14();
+            }
+        });
+    }
+
+    /* JADX INFO: Access modifiers changed from: private */
+    public /* synthetic */ void lambda$loadHistory$13(String display) {
+        if (this.dead) {
+            return;
+        }
+        this.history.setText(display);
+    }
+
+    /* JADX INFO: Access modifiers changed from: private */
+    /* renamed from: export, reason: merged with bridge method [inline-methods] */
+    public void lambda$onActivityResult$10(Uri uri) throws IOException {
+        int count = 0;
+        try {
+            OutputStream stream = getContentResolver().openOutputStream(uri);
+            try {
+                if (stream == null) {
+                    throw new IOException("No export stream");
+                }
+                ZipOutputStream zip = new ZipOutputStream(stream);
+                try {
+                    File[] files = logDir().listFiles(new FilenameFilter() { // from class: org.vef.mlkitlab.MainActivity$$ExternalSyntheticLambda7
+                        @Override // java.io.FilenameFilter
+                        public final boolean accept(File file, String str) {
+                            return MainActivity.lambda$export$15(file, str);
+                        }
+                    });
+                    if (files != null) {
+                        Arrays.sort(files, Comparator.comparing(new MainActivity$$ExternalSyntheticLambda1()));
+                        for (File file : files) {
+                            zip.putNextEntry(new ZipEntry(file.getName()));
+                            InputStream in = new FileInputStream(file);
+                            try {
+                                byte[] buffer = new byte[16384];
+                                while (true) {
+                                    int n = in.read(buffer);
+                                    if (n == -1) {
+                                        break;
+                                    } else {
+                                        zip.write(buffer, 0, n);
+                                    }
+                                }
+                                in.close();
+                                zip.closeEntry();
+                                count++;
+                            } catch (Throwable th) {
+                                try {
+                                    in.close();
+                                } catch (Throwable th2) {
+                                    th.addSuppressed(th2);
+                                }
+                                throw th;
+                            }
+                        }
+                    }
+                    zip.close();
+                    final int total = count;
+                    this.main.post(new Runnable() { // from class: org.vef.mlkitlab.MainActivity$$ExternalSyntheticLambda8
+                        @Override // java.lang.Runnable
+                        public final void run() {
+                            this.f$0.lambda$export$16(total);
+                        }
+                    });
+                    if (stream != null) {
+                        stream.close();
+                    }
+                } finally {
+                }
+            } finally {
+            }
+        } catch (Exception e) {
+            this.main.post(new Runnable() { // from class: org.vef.mlkitlab.MainActivity$$ExternalSyntheticLambda9
+                @Override // java.lang.Runnable
+                public final void run() {
+                    this.f$0.lambda$export$17(e);
+                }
+            });
+        }
+    }
+
+    static /* synthetic */ boolean lambda$export$15(File d, String n) {
+        return n.endsWith(".jsonl") || n.endsWith(".json");
+    }
+
+    /* JADX INFO: Access modifiers changed from: private */
+    public /* synthetic */ void lambda$export$16(int total) {
+        if (this.dead) {
+            return;
+        }
+        message("Exported " + total + " persistent diagnostic files. No photos included or uploaded.");
+    }
+
+    /* JADX INFO: Access modifiers changed from: private */
+    public /* synthetic */ void lambda$export$17(Exception e) {
+        if (this.dead) {
+            return;
+        }
+        message("Export failed: " + e);
+    }
+
+    @Override // android.app.Activity
+    protected void onSaveInstanceState(Bundle b) {
+        super.onSaveInstanceState(b);
+        if (this.selected != null) {
+            b.putString("selected", this.selected.toString());
+        }
+    }
+
+    @Override // android.app.Activity
+    protected void onDestroy() {
+        if (this.uiGuard != null) {
+            this.main.removeCallbacks(this.uiGuard);
+        }
+        if (this.active) {
+            try {
+                startService(control(OcrDiagnosticService.CANCEL));
+            } catch (Exception e) {
+            }
+        }
+        this.dead = true;
+        this.io.shutdown();
+        super.onDestroy();
+    }
+}

@@ -1,0 +1,1149 @@
+package org.vef.mlkitlab;
+
+import android.app.Service;
+import android.content.Intent;
+import android.net.Uri;
+import android.os.Bundle;
+import android.os.IBinder;
+import android.os.Process;
+import android.os.ResultReceiver;
+import android.util.AtomicFile;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Objects;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+import org.vef.mlkitlab.TableParser;
+
+/* loaded from: classes3.dex */
+public final class OcrDiagnosticService extends Service {
+    public static final String CANCEL = "cancel";
+    public static final String DISPLAYED = "displayed";
+    public static final int DONE = 4;
+    public static final int PROGRESS = 1;
+    public static final int RESULT = 2;
+    public static final String RUN = "run";
+    public static final int STOPPED = 3;
+    private volatile boolean active;
+    private volatile RunJournal journal;
+    private File logs;
+    private volatile ResultReceiver receiver;
+    private final ExecutorService worker = Executors.newSingleThreadExecutor();
+    private final ScheduledExecutorService watchdog = Executors.newSingleThreadScheduledExecutor();
+    private final AtomicBoolean terminating = new AtomicBoolean(false);
+    private volatile String runId = "";
+
+    @Override // android.app.Service
+    public void onCreate() {
+        super.onCreate();
+        this.logs = new File(getFilesDir(), "diagnostics");
+        this.logs.mkdirs();
+    }
+
+    @Override // android.app.Service
+    public IBinder onBind(Intent intent) {
+        return null;
+    }
+
+    @Override // android.app.Service
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        if (intent == null) {
+            return 2;
+        }
+        String action = intent.getAction();
+        String id = intent.getStringExtra("runId");
+        if (CANCEL.equals(action) && Objects.equals(id, this.runId)) {
+            this.watchdog.execute(new Runnable() { // from class: org.vef.mlkitlab.OcrDiagnosticService$$ExternalSyntheticLambda0
+                @Override // java.lang.Runnable
+                public final void run() {
+                    this.f$0.lambda$onStartCommand$0();
+                }
+            });
+            return 2;
+        }
+        if (DISPLAYED.equals(action) && Objects.equals(id, this.runId)) {
+            this.worker.execute(new Runnable() { // from class: org.vef.mlkitlab.OcrDiagnosticService$$ExternalSyntheticLambda1
+                @Override // java.lang.Runnable
+                public final void run() {
+                    this.f$0.lambda$onStartCommand$1();
+                }
+            });
+            return 2;
+        }
+        if (!RUN.equals(action)) {
+            if (!this.active) {
+                stopSelf();
+            }
+            return 2;
+        }
+        ResultReceiver next = receive(intent);
+        if (this.active) {
+            if (next != null) {
+                Bundle b = new Bundle();
+                b.putString("runId", id);
+                b.putString("message", "A diagnostic run is already active.");
+                next.send(3, b);
+            }
+            return 2;
+        }
+        this.receiver = next;
+        this.runId = id;
+        this.active = true;
+        final Uri uri = (Uri) intent.getParcelableExtra("uri");
+        this.worker.execute(new Runnable() { // from class: org.vef.mlkitlab.OcrDiagnosticService$$ExternalSyntheticLambda2
+            @Override // java.lang.Runnable
+            public final void run() throws Throwable {
+                this.f$0.lambda$onStartCommand$2(uri);
+            }
+        });
+        this.watchdog.scheduleWithFixedDelay(new Runnable() { // from class: org.vef.mlkitlab.OcrDiagnosticService$$ExternalSyntheticLambda3
+            @Override // java.lang.Runnable
+            public final void run() {
+                this.f$0.lambda$onStartCommand$3();
+            }
+        }, 200L, 500L, TimeUnit.MILLISECONDS);
+        return 2;
+    }
+
+    /* JADX INFO: Access modifiers changed from: private */
+    public /* synthetic */ void lambda$onStartCommand$0() {
+        terminate("USER_CANCELLED");
+    }
+
+    /* JADX INFO: Access modifiers changed from: private */
+    public /* synthetic */ void lambda$onStartCommand$1() {
+        try {
+            if (this.journal == null || !this.journal.running()) {
+                return;
+            }
+            this.journal.end("UI acknowledged all result rows");
+            this.journal.stop("COMPLETED");
+            send(4, "Completed. All OCR values remain unconfirmed.", null);
+            this.active = false;
+            stopSelf();
+        } catch (Exception e) {
+            terminate("JOURNAL_ERROR: " + e);
+        }
+    }
+
+    /* JADX INFO: Access modifiers changed from: private */
+    public /* synthetic */ void lambda$onStartCommand$3() {
+        RunJournal j = this.journal;
+        if (!this.active || j == null || this.terminating.get()) {
+            return;
+        }
+        String reason = j.deadlineReason();
+        if (reason.isEmpty()) {
+            send(1, "Stage: " + j.stage() + " · elapsed " + j.elapsed() + " ms / 15000 ms", null);
+        } else {
+            terminate(reason);
+        }
+    }
+
+    private ResultReceiver receive(Intent i) {
+        return (ResultReceiver) i.getParcelableExtra("receiver");
+    }
+
+    private void send(int code, String message, String resultFile) {
+        ResultReceiver r = this.receiver;
+        if (r == null) {
+            return;
+        }
+        Bundle b = new Bundle();
+        b.putString("runId", this.runId);
+        b.putInt("workerPid", Process.myPid());
+        b.putString("message", message);
+        if (resultFile != null) {
+            b.putString("resultFile", resultFile);
+        }
+        RunJournal j = this.journal;
+        if (j != null) {
+            b.putString("trace", j.snapshot());
+        }
+        r.send(code, b);
+    }
+
+    private void begin(String stage, long limit) throws IOException {
+        this.journal.begin(stage, limit);
+        send(1, "Stage: " + stage, null);
+    }
+
+    private void terminate(String reason) {
+        if (this.terminating.compareAndSet(false, true)) {
+            RunJournal j = this.journal;
+            if (j == null) {
+                try {
+                    j = new RunJournal(new File(this.logs, this.runId + ".jsonl"));
+                    this.journal = j;
+                } catch (IOException e) {
+                }
+            }
+            String detail = reason + (j == null ? "" : " · active stage " + j.stage());
+            if (j != null) {
+                try {
+                    j.event("PROCESS_TERMINATION", "Stopping isolated OCR process; no ML Kit cancellation API claimed");
+                    j.stop(detail);
+                } catch (IOException e2) {
+                    detail = detail + " · log write failed: " + e2.getClass().getSimpleName();
+                }
+            }
+            send(3, detail + ". Diagnostic files remain available for export.", null);
+            Process.killProcess(Process.myPid());
+        }
+    }
+
+    /* JADX INFO: Access modifiers changed from: private */
+    /* JADX WARN: Code restructure failed: missing block: B:100:0x0374, code lost:
+
+        r5 = r30.getElements().iterator();
+        r4 = r31;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:102:0x0386, code lost:
+
+        if (r5.hasNext() == false) goto L345;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:103:0x0388, code lost:
+
+        r33 = r5.next();
+        r14 = r14 + 1;
+        r34 = r33.getBoundingBox();
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:104:0x0396, code lost:
+
+        if (r34 != null) goto L346;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:105:0x0398, code lost:
+
+        r4 = r4 + 1;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:106:0x039b, code lost:
+
+        r42 = r4;
+        r43 = r5;
+        r3.add(new org.vef.mlkitlab.TableParser.Token(r33.getText(), r34.left, r34.top, r34.right, r34.bottom, r33.getConfidence(), r3.size()));
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:107:0x03cb, code lost:
+
+        r4 = r42;
+        r5 = r43;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:108:0x03d2, code lost:
+
+        r5 = r32;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:110:0x03de, code lost:
+
+        r0 = th;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:111:0x03df, code lost:
+
+        r3 = r8;
+        r4 = r22;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:112:0x03e6, code lost:
+
+        r0 = e;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:114:0x03e8, code lost:
+
+        r0 = e;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:115:0x03e9, code lost:
+
+        r3 = r8;
+        r4 = r22;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:116:0x03f0, code lost:
+
+        r32 = r5;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:118:0x03f4, code lost:
+
+        r27 = r8;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:119:0x03f6, code lost:
+
+        r10 = r22;
+        r45.journal.end("blocks=" + r10 + " lines=" + r13 + " elements=" + r14 + " missingElementBoxes=" + r4);
+        begin("SAVE_RAW_OCR", 3000);
+        r5 = new org.json.JSONObject().put("prototype", "VEF ML Kit Lab 0.2.2-diagnostic").put("runId", r45.runId).put("package", getPackageName()).put("rawText", r0.getText()).put("blockCount", r10).put("lineCount", r13).put("elementCount", r14).put("sourceWidth", r6.outWidth).put("sourceHeight", r6.outHeight).put("ocrWidth", r7).put("ocrHeight", r11).put("ocrCalls", 1).put("tokensInOrientedOcrPixels", tokens(r3)).put("linesInOrientedOcrPixels", tokens(r15));
+        save(new java.io.File(r45.logs, r45.runId + "-raw.json"), r5.toString(2));
+        r45.journal.end("Raw OCR persisted before parser invocation");
+        begin("PARSER_INCLUDING_INTERNAL_VALIDATION", 5000);
+        r4 = org.vef.mlkitlab.TableParser.parse(r3, r15);
+        r45.journal.end(r4.diagnostic);
+        begin("VALIDATION_AUDIT", 2000);
+        r6 = new org.json.JSONArray();
+        r8 = 0;
+        r9 = 0;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:120:0x04f9, code lost:
+
+        r16 = r3;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:121:0x04fd, code lost:
+
+        if (r9 >= r4.rowCount) goto L351;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:122:0x04ff, code lost:
+
+        r3 = new org.json.JSONObject();
+        r17 = r7;
+        r7 = 0;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:123:0x050c, code lost:
+
+        r18 = r8;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:124:0x050f, code lost:
+
+        if (r7 >= 5) goto L352;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:125:0x0511, code lost:
+
+        r8 = tokens(r4.evidence[r9][r7]);
+        r31 = r7;
+        r30 = r9;
+        r33 = r10;
+        r34 = r11;
+        r3.put(org.vef.mlkitlab.TableParser.LABELS[r31], new org.json.JSONObject().put("value", r4.cells[r30][r31]).put(androidx.core.app.NotificationCompat.CATEGORY_STATUS, r4.status[r30][r31]).put("reason", r4.reasons[r30][r31]).put("originalFragments", r8));
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:126:0x0565, code lost:
+
+        if ("invalid".equals(r4.status[r30][r31]) == false) goto L128;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:127:0x0567, code lost:
+
+        r8 = r18 + 1;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:128:0x056b, code lost:
+
+        r8 = r18;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:129:0x056d, code lost:
+
+        r7 = r31 + 1;
+        r9 = r30;
+        r10 = r33;
+        r11 = r34;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:130:0x0576, code lost:
+
+        r30 = r9;
+        r6.put(new org.json.JSONObject().put("row", r30 + 1).put("cells", r3));
+        r9 = r30 + 1;
+        r3 = r16;
+        r7 = r17;
+        r8 = r18;
+        r10 = r10;
+        r11 = r11;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:131:0x05a2, code lost:
+
+        r5.put("rows", r6).put("diagnostic", r4.diagnostic).put("associatedCells", r4.associatedCells).put("coherentCandidates", r4.coherentCells).put("uncertainCandidates", r4.reviewCells).put("invalidCandidates", r8).put("headers", new org.json.JSONArray((java.util.Collection) r4.headers)).put("headerCandidates", new org.json.JSONArray((java.util.Collection) r4.headerCandidates)).put("warnings", new org.json.JSONArray((java.util.Collection) r4.warnings)).put("skewSlope", r4.slope).put("automaticApproval", false);
+        r45.journal.end("Read-only audit; no correction or automatic acceptance; rows=" + r4.rowCount + " cells=" + r4.associatedCells);
+        begin("SAVE_REPORT", 3000);
+        r3 = new java.io.File(r45.logs, r45.runId + "-result.json");
+        r5.put("trace", new org.json.JSONObject(r45.journal.snapshot()));
+        save(r3, r5.toString(2));
+        r45.journal.end("raw and result JSON persisted");
+        begin("CLEANUP", 3000);
+        r22.close();
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:132:0x067d, code lost:
+
+        r7 = null;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:133:0x067e, code lost:
+
+        r27.recycle();
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:134:0x0681, code lost:
+
+        r9 = null;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:135:0x0682, code lost:
+
+        r32.delete();
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:136:0x0685, code lost:
+
+        r10 = null;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:137:0x0686, code lost:
+
+        r45.journal.end("Native client and bitmap released after completed task");
+        begin("DISPLAY_RESULTS", 3000);
+        send(2, r4.diagnostic, r3.getName());
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:139:0x06a9, code lost:
+
+        if (r45.terminating.get() != false) goto L358;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:140:0x06ab, code lost:
+
+        if (0 == 0) goto L142;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:141:0x06ad, code lost:
+
+        r7.close();
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:142:0x06b0, code lost:
+
+        if (0 == 0) goto L146;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:144:0x06b6, code lost:
+
+        if (r9.isRecycled() != false) goto L146;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:145:0x06b8, code lost:
+
+        r9.recycle();
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:146:0x06bb, code lost:
+
+        if (0 == 0) goto L359;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:147:0x06bd, code lost:
+
+        r10.delete();
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:148:0x06c2, code lost:
+
+        r0 = th;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:149:0x06c3, code lost:
+
+        r4 = null;
+        r3 = null;
+        r5 = null;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:150:0x06c8, code lost:
+
+        r0 = e;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:152:0x06ca, code lost:
+
+        r0 = e;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:153:0x06cb, code lost:
+
+        r4 = null;
+        r3 = null;
+        r5 = null;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:154:0x06d0, code lost:
+
+        r0 = th;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:155:0x06d1, code lost:
+
+        r4 = null;
+        r3 = null;
+        r5 = r32;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:156:0x06d7, code lost:
+
+        r0 = e;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:157:0x06d8, code lost:
+
+        r4 = null;
+        r3 = null;
+        r5 = r32;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:158:0x06de, code lost:
+
+        r0 = e;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:159:0x06df, code lost:
+
+        r4 = null;
+        r3 = null;
+        r5 = r32;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:160:0x06e5, code lost:
+
+        r0 = th;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:161:0x06e6, code lost:
+
+        r4 = null;
+        r3 = r27;
+        r5 = r32;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:162:0x06ed, code lost:
+
+        r0 = e;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:163:0x06ee, code lost:
+
+        r4 = null;
+        r3 = r27;
+        r5 = r32;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:164:0x06f5, code lost:
+
+        r0 = e;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:165:0x06f6, code lost:
+
+        r4 = null;
+        r3 = r27;
+        r5 = r32;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:166:0x06fd, code lost:
+
+        r0 = th;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:167:0x06fe, code lost:
+
+        r4 = r22;
+        r3 = r27;
+        r5 = r32;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:168:0x0706, code lost:
+
+        r0 = e;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:169:0x0707, code lost:
+
+        r4 = r22;
+        r3 = r27;
+        r5 = r32;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:170:0x070f, code lost:
+
+        r0 = e;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:171:0x0710, code lost:
+
+        r4 = r22;
+        r3 = r27;
+        r5 = r32;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:172:0x0718, code lost:
+
+        r0 = th;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:173:0x0719, code lost:
+
+        r4 = r22;
+        r3 = r8;
+        r5 = r32;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:174:0x0723, code lost:
+
+        r0 = e;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:176:0x0725, code lost:
+
+        r0 = e;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:177:0x0726, code lost:
+
+        r4 = r22;
+        r3 = r8;
+        r5 = r32;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:178:0x0730, code lost:
+
+        r0 = th;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:179:0x0731, code lost:
+
+        r4 = r22;
+        r3 = r8;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:180:0x073b, code lost:
+
+        r0 = e;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:182:0x073d, code lost:
+
+        r0 = e;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:183:0x073e, code lost:
+
+        r4 = r22;
+        r3 = r8;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:184:0x0748, code lost:
+
+        r0 = th;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:185:0x0749, code lost:
+
+        r3 = r8;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:186:0x0753, code lost:
+
+        r0 = e;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:188:0x0755, code lost:
+
+        r0 = e;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:189:0x0756, code lost:
+
+        r3 = r8;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:190:0x0760, code lost:
+
+        r0 = th;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:191:0x0761, code lost:
+
+        r3 = r7;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:192:0x076a, code lost:
+
+        r0 = e;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:194:0x076c, code lost:
+
+        r0 = e;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:195:0x076d, code lost:
+
+        r3 = r7;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:198:0x0788, code lost:
+
+        throw new java.io.IOException("Bitmap decode failed");
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:199:0x0789, code lost:
+
+        r0 = th;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:200:0x078a, code lost:
+
+        r3 = r8;
+        r4 = r22;
+        r5 = r32;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:201:0x0791, code lost:
+
+        r0 = e;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:202:0x0792, code lost:
+
+        r3 = r8;
+        r4 = r22;
+        r5 = r32;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:203:0x0799, code lost:
+
+        r0 = e;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:204:0x079a, code lost:
+
+        r3 = r8;
+        r4 = r22;
+        r5 = r32;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:205:0x07a1, code lost:
+
+        r22 = r4;
+        r32 = r5;
+        r29 = r6;
+        r12 = r9;
+        r23 = r13;
+        r9 = r8;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:206:0x07ae, code lost:
+
+        r12.inSampleSize *= 2;
+        r8 = r9;
+        r9 = r12;
+        r7 = r18;
+        r4 = r22;
+        r13 = r23;
+        r6 = r29;
+        r5 = r32;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:208:0x07d5, code lost:
+
+        throw new java.io.IOException("Unsupported image");
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:209:0x07d6, code lost:
+
+        r0 = move-exception;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:20:0x00e9, code lost:
+
+        throw new java.io.IOException("Image exceeds diagnostic input safety limit");
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:210:0x07d7, code lost:
+
+        r4 = r0;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:21:0x00ea, code lost:
+
+        r18 = r9;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:22:0x00ec, code lost:
+
+        r12.close();
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:230:0x0813, code lost:
+
+        r6.close();
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:232:0x0817, code lost:
+
+        r0 = move-exception;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:233:0x0818, code lost:
+
+        r4.addSuppressed(r0);
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:234:0x081b, code lost:
+
+        throw r4;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:23:0x00ef, code lost:
+
+        if (r6 == null) goto L30;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:24:0x00f1, code lost:
+
+        r6.close();
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:256:0x084d, code lost:
+
+        r45.journal.event("EXCEPTION", stack(r6));
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:263:0x086b, code lost:
+
+        r7 = "STARTING";
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:264:0x086e, code lost:
+
+        r7 = r45.journal.stage();
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:268:0x08a5, code lost:
+
+        if (r4 != null) goto L269;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:269:0x08a7, code lost:
+
+        r4.close();
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:26:0x00f5, code lost:
+
+        r0 = e;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:270:0x08aa, code lost:
+
+        if (r3 != null) goto L271;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:273:0x08b2, code lost:
+
+        r3.recycle();
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:274:0x08b5, code lost:
+
+        if (r5 != null) goto L275;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:275:0x08b7, code lost:
+
+        r5.delete();
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:279:0x08c4, code lost:
+
+        if (r45.terminating.get() == false) goto L280;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:280:0x08c6, code lost:
+
+        if (r4 != null) goto L281;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:281:0x08c8, code lost:
+
+        r4.close();
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:282:0x08cb, code lost:
+
+        if (r3 != null) goto L283;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:285:0x08d3, code lost:
+
+        r3.recycle();
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:286:0x08d6, code lost:
+
+        if (r5 != null) goto L287;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:287:0x08d8, code lost:
+
+        r5.delete();
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:288:0x08db, code lost:
+
+        throw r0;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:28:0x00f8, code lost:
+
+        r0 = e;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:30:0x00fb, code lost:
+
+        r13 = r18;
+        r45.journal.end("sourceBytes=" + r13);
+        begin("DECODE", 5000);
+        r6 = new android.graphics.BitmapFactory.Options();
+        r8 = 1;
+        r6.inJustDecodeBounds = true;
+        android.graphics.BitmapFactory.decodeFile(r5.getPath(), r6);
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:31:0x012d, code lost:
+
+        if (r6.outWidth <= 0) goto L207;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:33:0x0131, code lost:
+
+        if (r6.outHeight <= 0) goto L207;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:34:0x0133, code lost:
+
+        r9 = new android.graphics.BitmapFactory.Options();
+        r9.inSampleSize = 1;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:356:?, code lost:
+
+        throw r4;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:357:?, code lost:
+
+        throw r4;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:358:?, code lost:
+
+        return;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:359:?, code lost:
+
+        return;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:35:0x013a, code lost:
+
+        r18 = r7;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:360:?, code lost:
+
+        return;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:36:0x0149, code lost:
+
+        if ((java.lang.Math.max(r6.outWidth, r6.outHeight) / r9.inSampleSize) > 8192) goto L205;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:38:0x015d, code lost:
+
+        if (((r6.outWidth / r9.inSampleSize) * (r6.outHeight / r9.inSampleSize)) <= 16000000) goto L340;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:39:0x015f, code lost:
+
+        r22 = r4;
+        r32 = r5;
+        r29 = r6;
+        r12 = r9;
+        r23 = r13;
+        r9 = true;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:40:0x016e, code lost:
+
+        r9.inPreferredConfig = android.graphics.Bitmap.Config.ARGB_8888;
+        r7 = android.graphics.BitmapFactory.decodeFile(r5.getPath(), r9);
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:42:0x017c, code lost:
+
+        if (r7 == null) goto L196;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:43:0x017e, code lost:
+
+        r45.journal.end("source=" + r6.outWidth + "x" + r6.outHeight + " decoded=" + r7.getWidth() + "x" + r7.getHeight() + " sample=" + r9.inSampleSize + " bitmapBytes=" + r7.getAllocationByteCount());
+        begin("PREPARE_IMAGE", 5000);
+        r3 = new androidx.exifinterface.media.ExifInterface(r5).getAttributeInt(androidx.exifinterface.media.ExifInterface.TAG_ORIENTATION, 1);
+        r26 = new android.graphics.Matrix();
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:45:0x01f8, code lost:
+
+        switch(r3) {
+            case 2: goto L54;
+            case 3: goto L53;
+            case 4: goto L52;
+            case 5: goto L51;
+            case 6: goto L50;
+            case 7: goto L48;
+            case 8: goto L47;
+            default: goto L62;
+        };
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:47:0x01fc, code lost:
+
+        r26.setRotate(270.0f);
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:48:0x0200, code lost:
+
+        r26.setRotate(270.0f);
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:49:0x0203, code lost:
+
+        r26.postScale(-1.0f, 1.0f);
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:50:0x0207, code lost:
+
+        r26.setRotate(90.0f);
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:51:0x020b, code lost:
+
+        r26.setRotate(90.0f);
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:52:0x020f, code lost:
+
+        r26.setScale(1.0f, -1.0f);
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:53:0x0213, code lost:
+
+        r26.setRotate(180.0f);
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:54:0x0219, code lost:
+
+        r26.setScale(-1.0f, 1.0f);
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:56:0x021d, code lost:
+
+        r0 = th;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:57:0x021e, code lost:
+
+        r3 = r7;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:58:0x0222, code lost:
+
+        r0 = e;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:60:0x0224, code lost:
+
+        r0 = e;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:61:0x0225, code lost:
+
+        r3 = r7;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:63:0x022d, code lost:
+
+        if (r26.isIdentity() != false) goto L82;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:64:0x022f, code lost:
+
+        r7 = android.graphics.Bitmap.createBitmap(r7, 0, 0, r7.getWidth(), r7.getHeight(), r26, true);
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:66:0x0245, code lost:
+
+        if (r7 == r7) goto L75;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:67:0x0247, code lost:
+
+        r7.recycle();
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:69:0x024b, code lost:
+
+        r0 = th;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:70:0x024c, code lost:
+
+        r3 = r7;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:71:0x024f, code lost:
+
+        r0 = e;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:73:0x0251, code lost:
+
+        r0 = e;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:74:0x0252, code lost:
+
+        r3 = r7;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:75:0x0255, code lost:
+
+        r8 = r7;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:76:0x0257, code lost:
+
+        r0 = th;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:77:0x0258, code lost:
+
+        r3 = r7;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:78:0x025d, code lost:
+
+        r0 = e;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:80:0x025f, code lost:
+
+        r0 = e;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:81:0x0260, code lost:
+
+        r3 = r7;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:82:0x0265, code lost:
+
+        r8 = r7;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:83:0x0269, code lost:
+
+        r7 = r8.getWidth();
+        r11 = r8.getHeight();
+        r12 = com.google.mlkit.vision.common.InputImage.fromBitmap(r8, 0);
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:84:0x027e, code lost:
+
+        r22 = r4;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:85:0x0280, code lost:
+
+        r45.journal.end("EXIF=" + r3 + " OCR=" + r7 + "x" + r11 + " bundled Latin; no additional scaling/preprocessing");
+        begin("MLKIT_SETUP", 5000);
+        com.google.mlkit.common.MlKit.initialize(getApplicationContext());
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:86:0x02be, code lost:
+
+        r4 = com.google.mlkit.vision.text.TextRecognition.getClient(com.google.mlkit.vision.text.latin.TextRecognizerOptions.DEFAULT_OPTIONS);
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:87:0x02bf, code lost:
+
+        r45.journal.end("ML Kit explicitly initialized in secondary process");
+        begin("MLKIT_OCR", 10000);
+        r0 = (com.google.mlkit.vision.text.Text) com.google.android.gms.tasks.Tasks.await(r4.process(r12));
+        r45.journal.end("nativeTaskComplete=true; OCR calls=1");
+        begin("EXTRACT", 3000);
+        r3 = new java.util.ArrayList<>();
+        r15 = new java.util.ArrayList<>();
+        r22 = r0.getTextBlocks().size();
+        r29 = r0.getTextBlocks().iterator();
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:88:0x0309, code lost:
+
+        r13 = 0;
+        r14 = 0;
+        r22 = r4;
+        r4 = 0;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:90:0x0315, code lost:
+
+        if (r29.hasNext() == false) goto L343;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:91:0x0317, code lost:
+
+        r27 = r29.next();
+        r28 = r27.getLines().iterator();
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:93:0x0329, code lost:
+
+        if (r28.hasNext() == false) goto L344;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:94:0x032b, code lost:
+
+        r30 = r28.next();
+        r13 = r13 + 1;
+        r31 = r30.getBoundingBox();
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:95:0x0339, code lost:
+
+        if (r31 == null) goto L99;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:97:0x0341, code lost:
+
+        r31 = r4;
+        r4 = r31;
+        r32 = r5;
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:98:0x0347, code lost:
+
+        r15.add(new org.vef.mlkitlab.TableParser.Token(r30.getText(), r4.left, r4.top, r4.right, r4.bottom, r30.getConfidence(), (-1) - r15.size()));
+     */
+    /* JADX WARN: Code restructure failed: missing block: B:99:0x036e, code lost:
+
+        r31 = r4;
+        r4 = r31;
+        r32 = r5;
+     */
+    /* JADX WARN: Multi-variable type inference failed */
+    /* JADX WARN: Not initialized variable reg: 22, insn: 0x081d: MOVE (r4 I:??[OBJECT, ARRAY]) = (r22 I:??[OBJECT, ARRAY] A[D('recognizer' com.google.mlkit.vision.text.TextRecognizer)]), block:B:236:0x081d */
+    /* JADX WARN: Not initialized variable reg: 22, insn: 0x0824: MOVE (r4 I:??[OBJECT, ARRAY]) = (r22 I:??[OBJECT, ARRAY] A[D('recognizer' com.google.mlkit.vision.text.TextRecognizer)]), block:B:238:0x0824 */
+    /* JADX WARN: Not initialized variable reg: 22, insn: 0x082a: MOVE (r4 I:??[OBJECT, ARRAY]) = (r22 I:??[OBJECT, ARRAY] A[D('recognizer' com.google.mlkit.vision.text.TextRecognizer)]), block:B:240:0x082a */
+    /* JADX WARN: Not initialized variable reg: 32, insn: 0x081f: MOVE (r5 I:??[OBJECT, ARRAY]) = (r32 I:??[OBJECT, ARRAY] A[D('local' java.io.File)]), block:B:236:0x081d */
+    /* JADX WARN: Not initialized variable reg: 32, insn: 0x0826: MOVE (r5 I:??[OBJECT, ARRAY]) = (r32 I:??[OBJECT, ARRAY] A[D('local' java.io.File)]), block:B:238:0x0824 */
+    /* JADX WARN: Not initialized variable reg: 32, insn: 0x082c: MOVE (r5 I:??[OBJECT, ARRAY]) = (r32 I:??[OBJECT, ARRAY] A[D('local' java.io.File)]), block:B:240:0x082a */
+    /* JADX WARN: Removed duplicated region for block: B:256:0x084d A[Catch: all -> 0x0859, IOException -> 0x085b, TRY_LEAVE, TryCatch #24 {all -> 0x0859, blocks: (B:24:0x00f1, B:254:0x0849, B:256:0x084d, B:261:0x085c, B:265:0x0874, B:264:0x086e), top: B:291:0x0009 }] */
+    /* JADX WARN: Removed duplicated region for block: B:263:0x086b  */
+    /* JADX WARN: Removed duplicated region for block: B:264:0x086e A[Catch: all -> 0x0859, TryCatch #24 {all -> 0x0859, blocks: (B:24:0x00f1, B:254:0x0849, B:256:0x084d, B:261:0x085c, B:265:0x0874, B:264:0x086e), top: B:291:0x0009 }] */
+    /* JADX WARN: Removed duplicated region for block: B:268:0x08a5  */
+    /* JADX WARN: Removed duplicated region for block: B:280:0x08c6  */
+    /* JADX WARN: Removed duplicated region for block: B:305:0x0813 A[EXC_TOP_SPLITTER, SYNTHETIC] */
+    /* JADX WARN: Removed duplicated region for block: B:356:? A[Catch: all -> 0x081c, OutOfMemoryError -> 0x0823, Exception -> 0x0829, SYNTHETIC, TRY_LEAVE, TryCatch #29 {Exception -> 0x0829, OutOfMemoryError -> 0x0823, all -> 0x081c, blocks: (B:234:0x081b, B:233:0x0818, B:206:0x07ae, B:207:0x07c6, B:208:0x07d5), top: B:321:0x00a8 }] */
+    /* JADX WARN: Type inference failed for: r8v20 */
+    /* JADX WARN: Type inference failed for: r8v21 */
+    /* JADX WARN: Type inference failed for: r8v22 */
+    /* renamed from: process, reason: merged with bridge method [inline-methods] */
+    /*
+        Code decompiled incorrectly, please refer to instructions dump.
+        To view partially-correct add '--show-bad-code' argument
+    */
+    public void lambda$onStartCommand$2(android.net.Uri r46) throws java.lang.Throwable {
+        /*
+            Method dump skipped, instructions count: 2286
+            To view this dump add '--comments-level debug' option
+        */
+        throw new UnsupportedOperationException("Method not decompiled: org.vef.mlkitlab.OcrDiagnosticService.lambda$onStartCommand$2(android.net.Uri):void");
+    }
+
+    private static String stack(Throwable e) {
+        StringWriter s = new StringWriter();
+        e.printStackTrace(new PrintWriter(s));
+        return s.toString();
+    }
+
+    private static JSONArray tokens(List<TableParser.Token> values) throws JSONException {
+        JSONArray a = new JSONArray();
+        for (TableParser.Token t : values) {
+            a.put(new JSONObject().put("id", t.id).put("text", t.text).put("left", t.left).put("top", t.top).put("right", t.right).put("bottom", t.bottom).put("confidence", Float.isFinite(t.confidence) ? Float.valueOf(t.confidence) : JSONObject.NULL));
+        }
+        return a;
+    }
+
+    private static void save(File file, String data) throws IOException {
+        AtomicFile target = new AtomicFile(file);
+        FileOutputStream out = target.startWrite();
+        try {
+            out.write(data.getBytes(StandardCharsets.UTF_8));
+            target.finishWrite(out);
+        } catch (IOException e) {
+            target.failWrite(out);
+            throw e;
+        }
+    }
+
+    @Override // android.app.Service
+    public void onDestroy() {
+        this.worker.shutdown();
+        this.watchdog.shutdown();
+        super.onDestroy();
+    }
+}

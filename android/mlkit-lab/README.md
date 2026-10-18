@@ -1,3 +1,5 @@
+> Diagnostic branch: see [recovery](DIAGNOSTIC-022-RECOVERY.md) and [validation](DIAGNOSTIC-022-VALIDATION.md). This branch builds diagnostic 0.2.2 from recovered executable classes plus an auditable initialization-order patch. The 0.1 Java files remain historical reference and baseline tests; they are not compiled into this diagnostic APK.
+
 # VEF ML Kit Lab 0.1
 
 Isolated Android experiment in `icdumbo/VEF-calculator`, branch `codex/vef-mlkit-lab`.

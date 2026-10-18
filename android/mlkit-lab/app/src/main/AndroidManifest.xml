@@ -2,12 +2,13 @@
     <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" tools:node="remove" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
-    <application android:label="VEF ML Kit Lab" android:icon="@drawable/lab_icon" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:allowBackup="false" android:dataExtractionRules="@xml/backup_rules" android:supportsRtl="true" android:usesCleartextTraffic="false">
+    <application android:label="VEF ML Kit Lab Diagnostic" android:fullBackupContent="false" android:icon="@drawable/lab_icon" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:allowBackup="false" android:dataExtractionRules="@xml/backup_rules" android:supportsRtl="true" android:usesCleartextTraffic="false">
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
         </activity>
-        <provider android:name="androidx.core.content.FileProvider" android:authorities="org.vef.mlkitlab.files" android:exported="false" android:grantUriPermissions="true">
+        <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.files" android:exported="false" android:grantUriPermissions="true">
             <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths" />
         </provider>
-    </application>
+      <service android:name="org.vef.mlkitlab.OcrDiagnosticService" android:exported="false" android:process=":ocr_diagnostic" />
+  </application>
 </manifest>
