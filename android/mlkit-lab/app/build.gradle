@@ -15,8 +15,9 @@ def recover = tasks.register('recoverDiagnostic', JavaExec) {
     mainClass = 'RecoverDiagnostic'
     def original = rootProject.file('recovery/diagnostic-022-before.jar')
     inputs.file original
+    inputs.file rootProject.file('recovery/RecoverDiagnostic.java')
     outputs.file recoveredJar
-    args original.absolutePath, recoveredJar.get().asFile.absolutePath, '--fix-headers'
+    args original.absolutePath, recoveredJar.get().asFile.absolutePath, '--cell-retry'
     doFirst { recoveredJar.get().asFile.parentFile.mkdirs() }
 }
 
@@ -27,8 +28,8 @@ android {
         applicationId 'org.vef.mlkitlab.diagnostic'
         minSdk 26
         targetSdk 36
-        versionCode 7
-        versionName '0.2.2-diagnostic-headerfix1'
+        versionCode 8
+        versionName '0.2.2-diagnostic-cellretry1'
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17

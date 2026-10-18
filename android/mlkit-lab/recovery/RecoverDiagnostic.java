@@ -54,7 +54,8 @@ public final class RecoverDiagnostic {
     }
   }
   public static void main(String[] args)throws Exception{
-    boolean headerFix=args.length==3&&args[2].equals("--fix-headers");
+    boolean cellRetry=args.length==3&&args[2].equals("--cell-retry");
+    boolean headerFix=args.length==3&&(args[2].equals("--fix-headers")||cellRetry);
     boolean parserFix=args.length==3&&(args[2].equals("--fix-parser")||headerFix);
     boolean fix=args.length==3&&(args[2].equals("--fix-initialization")||parserFix);
     int patched=0,classes=0,methods=0;
@@ -112,6 +113,45 @@ public final class RecoverDiagnostic {
                 }
               }
             }
+            before.put(m.name+m.desc,instructions(m));
+          }
+          if(cellRetry && c.name.equals(SERVICE) && m.name.equals("process")) {
+            int anchors=0;
+            for(AbstractInsnNode n:m.instructions.toArray()) if(n instanceof LdcInsnNode && "VALIDATION_AUDIT".equals(((LdcInsnNode)n).cst)) {
+              AbstractInsnNode at=previous(n);
+              if(!(at instanceof VarInsnNode)||((VarInsnNode)at).var!=0)throw new IllegalStateException("Unexpected audit anchor");
+              InsnList code=new InsnList();
+              code.add(new VarInsnNode(Opcodes.ALOAD,0));code.add(new LdcInsnNode("INVALID_CELL_REREAD"));code.add(new LdcInsnNode(6000L));
+              code.add(new MethodInsnNode(Opcodes.INVOKESPECIAL,SERVICE,"begin","(Ljava/lang/String;J)V",false));
+              code.add(new VarInsnNode(Opcodes.ALOAD,1)); // oriented original bitmap
+              code.add(new VarInsnNode(Opcodes.ALOAD,13)); // existing recognizer
+              code.add(new VarInsnNode(Opcodes.ALOAD,16)); // parser result
+              code.add(new VarInsnNode(Opcodes.ALOAD,0));code.add(new FieldInsnNode(Opcodes.GETFIELD,SERVICE,"journal","Lorg/vef/mlkitlab/RunJournal;"));
+              code.add(new VarInsnNode(Opcodes.ALOAD,15)); // frozen report
+              code.add(new VarInsnNode(Opcodes.ALOAD,0));code.add(new FieldInsnNode(Opcodes.GETFIELD,SERVICE,"logs","Ljava/io/File;"));
+              code.add(new VarInsnNode(Opcodes.ALOAD,0));code.add(new FieldInsnNode(Opcodes.GETFIELD,SERVICE,"runId","Ljava/lang/String;"));
+              code.add(new MethodInsnNode(Opcodes.INVOKESTATIC,"org/vef/mlkitlab/CellReread","run","(Landroid/graphics/Bitmap;Lcom/google/mlkit/vision/text/TextRecognizer;Lorg/vef/mlkitlab/TableParser$Result;Lorg/vef/mlkitlab/RunJournal;Lorg/json/JSONObject;Ljava/io/File;Ljava/lang/String;)V",false));
+              code.add(new VarInsnNode(Opcodes.ALOAD,0));code.add(new FieldInsnNode(Opcodes.GETFIELD,SERVICE,"journal","Lorg/vef/mlkitlab/RunJournal;"));
+              code.add(new LdcInsnNode("Optional invalid-cell rereads completed; initial parser values unchanged"));
+              code.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL,"org/vef/mlkitlab/RunJournal","end","(Ljava/lang/String;)V",false));
+              m.instructions.insertBefore(at,code);anchors++;
+            }
+            if(anchors!=1)throw new IllegalStateException("Expected one audit anchor");
+            before.put(m.name+m.desc,instructions(m));
+          }
+          if(cellRetry && c.name.equals("org/vef/mlkitlab/MainActivity") && m.name.equals("render")) {
+            int anchors=0;
+            for(AbstractInsnNode n:m.instructions.toArray()) if(n instanceof MethodInsnNode) {
+              MethodInsnNode call=(MethodInsnNode)n;
+              if(call.owner.equals("android/widget/LinearLayout")&&call.name.equals("addView")) {
+                InsnList code=new InsnList();code.add(new VarInsnNode(Opcodes.ALOAD,0));
+                code.add(new FieldInsnNode(Opcodes.GETFIELD,c.name,"resultRows","Landroid/widget/LinearLayout;"));
+                code.add(new VarInsnNode(Opcodes.ALOAD,1));code.add(new VarInsnNode(Opcodes.ILOAD,2));code.add(new VarInsnNode(Opcodes.ALOAD,11));
+                code.add(new MethodInsnNode(Opcodes.INVOKESTATIC,"org/vef/mlkitlab/CellReread","display","(Landroid/widget/LinearLayout;Lorg/json/JSONObject;ILjava/lang/String;)V",false));
+                m.instructions.insert(n,code);anchors++;
+              }
+            }
+            if(anchors!=1)throw new IllegalStateException("Expected one cell editor anchor");
             before.put(m.name+m.desc,instructions(m));
           }
           methods++;
