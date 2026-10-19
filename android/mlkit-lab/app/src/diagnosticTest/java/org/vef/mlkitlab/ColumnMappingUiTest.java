@@ -169,7 +169,9 @@ public class ColumnMappingUiTest {
     }
     @Test public void confirmNineColumnsWithFourIgnoredOpensOneHundredReviewValues()throws Exception { completedMapping(false); }
     @Test public void completedMappingResumesWithoutDetectionFileAndPreservesInvalidValue()throws Exception { completedMapping(true); }
-    private void completedMapping(boolean missingDetection)throws Exception {
+    @Test public void manualCorrectionSurvivesResumeNavigationAndRecreation()throws Exception { completedMapping(false,true); }
+    private void completedMapping(boolean missingDetection)throws Exception { completedMapping(missingDetection,false); }
+    private void completedMapping(boolean missingDetection,boolean correct)throws Exception {
         var controller=Robolectric.buildActivity(MappingActivity.class).setup();MappingActivity activity=controller.get();
         org.json.JSONObject raw=realReport();raw.remove("layout");String session="map-test-confirm";
         ColumnLayout detected=ColumnLayout.detect(ColumnLayout.tokens(raw.getJSONArray("tokensInOrientedOcrPixels")),raw.getInt("ocrWidth"),raw.getInt("ocrHeight"));
@@ -192,7 +194,10 @@ public class ColumnMappingUiTest {
         MappingRows mapped=new MappingRows(detected,choices);
         assertEquals(100,mapped.result.associatedCells);assertEquals("6362.5776",mapped.result.cells[2][3]);assertEquals("invalid",mapped.result.status[2][3]);
         org.json.JSONObject result=mapped.report().put("session",session).put("rawOcrFile",rawName).put("mapping",selection).put("usedActiveMs",100).put("cellOcrCalls",0);
+        org.json.JSONObject reread=new org.json.JSONObject().put("cells",new org.json.JSONArray().put(new org.json.JSONObject().put("row",3).put("column",TableParser.LABELS[3]).put("initialValue","6362.5776").put("attempts",new org.json.JSONArray().put(new org.json.JSONObject().put("variant","original").put("result",new org.json.JSONObject().put("rawText","6362.576"))).put(new org.json.JSONObject().put("variant","contrast").put("result",new org.json.JSONObject().put("rawText","6362.576"))))));
+        result.put("cellRereads",reread);
         MappingOcrService.save(new java.io.File(logs,resultName),result);
+        String resultBefore=readUtf8(new java.io.File(logs,resultName).toPath());
         String rawBefore=readUtf8(new java.io.File(logs,rawName).toPath()),selectionBefore=readUtf8(selectionFile.toPath());
         android.os.Bundle response=new android.os.Bundle();response.putString("session",session);response.putString("resultFile",resultName);
         ((android.os.ResultReceiver)started[0].getParcelableExtra("receiver")).send(2,response);
@@ -201,11 +206,74 @@ public class ColumnMappingUiTest {
         for(int r=0;r<20;r++)for(int c=0;c<5;c++)assertEquals(mapped.result.cells[r][c],values.get(r*5+c).getText().toString());
         assertTrue(visibleText(root).contains("Review Required"));assertFalse(visibleText(root).contains("Cannot load saved results"));
         assertEquals(rawBefore,readUtf8(new java.io.File(logs,rawName).toPath()));assertEquals(selectionBefore,readUtf8(selectionFile.toPath()));
+        if(correct) {
+            values.get(13).setText("6362.576");
+            Method restore=MappingActivity.class.getDeclaredMethod("restore");restore.setAccessible(true);restore.invoke(activity);
+            await(()->findButton(root,"Choose photograph").isEnabled() && edits(root).size()==100 && edits(root).get(13).getText().toString().equals("6362.576"));
+            Method bounds=MappingActivity.class.getDeclaredMethod("showBounds");bounds.setAccessible(true);bounds.invoke(activity);
+            assertTrue(visibleText(root).contains("Step 1"));
+            Method display=MappingActivity.class.getDeclaredMethod("showResults",org.json.JSONObject.class);display.setAccessible(true);display.invoke(activity,result);
+            assertEquals("6362.576",edits(root).get(13).getText().toString());
+            assertTrue(visibleText(root).contains("Initial OCR: 6362.5776"));
+            assertTrue(visibleText(root).contains("original: 6362.576"));
+            assertEquals(resultBefore,readUtf8(new java.io.File(logs,resultName).toPath()));
+            assertEquals(rawBefore,readUtf8(new java.io.File(logs,rawName).toPath()));
+            java.io.File[] reviews=logs.listFiles((dir,name)->name.endsWith("-inspector-review.json"));assertEquals(1,reviews.length);
+            org.json.JSONObject saved=MappingOcrService.read(reviews[0]);
+            org.json.JSONObject edit=saved.getJSONObject("edits").getJSONObject("2:"+ColumnLayout.FIELDS[3]);
+            assertEquals("6362.5776",edit.getString("originalOcrValue"));assertEquals("6362.576",edit.getString("inspectorValue"));
+            assertFalse(edit.getBoolean("confirmed"));assertFalse(saved.getBoolean("valuesConfirmed"));
+            assertEquals(reread.toString(),saved.getJSONObject("rereadCandidates").toString());
+        }
         controller.pause().stop().destroy();
         try(var resumed=Robolectric.buildActivity(MappingActivity.class).setup()) {
             View resumedRoot=resumed.get().findViewById(android.R.id.content);await(()->visibleText(resumedRoot).contains("Step 3"));
-            assertEquals(100,edits(resumedRoot).size());assertEquals("6362.5776",edits(resumedRoot).get(13).getText().toString());
+            assertEquals(100,edits(resumedRoot).size());assertEquals(correct?"6362.576":"6362.5776",edits(resumedRoot).get(13).getText().toString());
             assertTrue(visibleText(resumedRoot).contains("Review Required"));
         }
     }
+    private Button findButton(View v,String text) {
+        if(v instanceof Button && ((Button)v).getText().toString().equalsIgnoreCase(text))return (Button)v;
+        if(v instanceof ViewGroup)for(int i=0;i<((ViewGroup)v).getChildCount();i++){Button b=findButton(((ViewGroup)v).getChildAt(i),text);if(b!=null)return b;}
+        return null;
+    }
+    private org.json.JSONObject reviewReport()throws Exception {
+        return new org.json.JSONObject().put("rows",new org.json.JSONArray()).put("mapping",new org.json.JSONObject().put("layout",new org.json.JSONObject().put("bounds",new org.json.JSONArray("[0,100,200]"))).put("choices",new org.json.JSONArray("[0,1]")));
+    }
+    @Test public void reviewStorePreservesBlankTextAndOriginalOnEveryEdit()throws Exception {
+        java.io.File dir=java.nio.file.Files.createTempDirectory("review").toFile();org.json.JSONObject report=reviewReport();String before=report.toString();
+        MappingReviewStore store=new MappingReviewStore(dir,"map-a","result-a.json",report);
+        store.save(2,"Ship","6362.5776","6362.576");store.save(0,"Port","OCR port","Edited port");store.save(2,"Ship","6362.5776","");
+        MappingReviewStore restored=new MappingReviewStore(dir,"map-a","result-b.json",new org.json.JSONObject(report.toString()));
+        assertEquals("",restored.value(2,"Ship","6362.5776"));assertEquals("Edited port",restored.value(0,"Port","OCR port"));assertEquals(before,report.toString());
+        restored.save(2,"Ship","6362.5776","6362.576");
+        org.json.JSONObject saved=MappingOcrService.read(dir.listFiles((d,n)->n.endsWith(".json"))[0]);
+        assertEquals("6362.5776",saved.getJSONObject("edits").getJSONObject("2:Ship").getString("originalOcrValue"));
+        assertFalse(saved.getJSONObject("edits").getJSONObject("2:Ship").getBoolean("confirmed"));
+    }
+    @Test public void reviewStoreDoesNotApplyEditsToDifferentSessionOrGeometryOrFields()throws Exception {
+        java.io.File dir=java.nio.file.Files.createTempDirectory("review").toFile();org.json.JSONObject report=reviewReport();
+        MappingReviewStore store=new MappingReviewStore(dir,"map-a","a.json",report);store.save(2,"Ship","original","edited");
+        assertEquals("original",new MappingReviewStore(dir,"map-b","a.json",report).value(2,"Ship","original"));
+        org.json.JSONObject different=reviewReport();different.getJSONObject("mapping").getJSONObject("layout").put("bounds",new org.json.JSONArray("[0,90,200]"));
+        assertEquals("original",new MappingReviewStore(dir,"map-a","b.json",different).value(2,"Ship","original"));
+        different=reviewReport();different.getJSONObject("mapping").put("choices",new org.json.JSONArray("[1,0]"));
+        assertEquals("original",new MappingReviewStore(dir,"map-a","c.json",different).value(2,"Ship","original"));
+        assertEquals("edited",new MappingReviewStore(dir,"map-a","d.json",report).value(2,"Ship","original"));
+    }
+    @Test public void incompleteAtomicWriteRetainsLastSavedReview()throws Exception {
+        java.io.File dir=java.nio.file.Files.createTempDirectory("review").toFile();org.json.JSONObject report=reviewReport();
+        new MappingReviewStore(dir,"map-a","a.json",report).save(2,"Ship","original","edited");
+        java.io.File saved=dir.listFiles((d,n)->n.endsWith(".json"))[0];
+        android.util.AtomicFile atomic=new android.util.AtomicFile(saved);java.io.FileOutputStream interrupted=atomic.startWrite();interrupted.write("incomplete".getBytes(java.nio.charset.StandardCharsets.UTF_8));interrupted.close();
+        assertEquals("edited",new MappingReviewStore(dir,"map-a","a.json",report).value(2,"Ship","original"));
+    }
+    @Test public void corruptReviewIsRetainedAndNeverSilentlyReplaced()throws Exception {
+        java.io.File dir=java.nio.file.Files.createTempDirectory("review").toFile();org.json.JSONObject report=reviewReport();
+        new MappingReviewStore(dir,"map-a","a.json",report).save(2,"Ship","original","edited");
+        java.io.File saved=dir.listFiles((d,n)->n.endsWith(".json"))[0];java.nio.file.Files.write(saved.toPath(),"damaged".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        try{new MappingReviewStore(dir,"map-a","a.json",report);fail("Corrupt evidence must fail visibly");}catch(org.json.JSONException expected){}
+        assertEquals("damaged",readUtf8(saved.toPath()));
+    }
+
 }
