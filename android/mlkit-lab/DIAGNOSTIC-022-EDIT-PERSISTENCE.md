@@ -45,15 +45,21 @@ skips, including 24 Android UI cases across API 28 and 35. Lint: 0 errors,
 19 existing warnings. APK package/version verified, signature cryptographically
 valid and new persistence classes/fields present in DEX; no Internet permission.
 
-DELIVERY BLOCKED: the Codespace debug key certificate is
-715d49c691ed5622028cc295bf4dcdf620da74d0dc09e2886c46e76fd62ee03e,
-while the installed v11 lab uses
+Delivery completed: the original signing key was recovered in the Work host.
+The existing tested APK was re-signed locally; every non-META-INF ZIP entry is
+byte-identical to the tested build. No implementation or rebuild was needed.
+The key was not transferred to Codespaces or committed. Final v2/v3 signatures
+are valid and the certificate matches the installed v11 lab:
 d162e292fd285b8ab19b3af48e08f8fffd663065550893678ef5a28f3ed4b3cf.
-The original lab-repair.keystore was in the previous Work host, not this
-Codespace. The current debug build MUST NOT be used as an in-place update.
-Obtain the original key and re-sign the verified payload, then verify the final
-APK certificate and install with adb install -r on the connected test device.
-No Android device is connected to this Codespace, so real installation, process
-restart and APK-upgrade preservation have not been tested on Galaxy Fold.
-Do not uninstall or clear application data. No incompatible APK was published
-as a Galaxy Fold update. Existing v11 delivery artifacts are retained.
+Final APK SHA-256:
+1301b5060c888e72df085c61419d67228150afbb4940a6c3c2c0ea15ac0f6a26
+Package remains org.vef.mlkitlab.diagnostic, versionCode 12.
+Signed delivery: build/delivery/VEF-ML-Kit-Lab-0.2.2-diagnostic-editfix1.apk.
+The standard app/build/outputs/apk/debug/app-debug.apk is the same signed file.
+
+The resumed session verified the clean branch and origin at 377f691, the stored
+94 passing test results and Lint (0 errors, 19 warnings), the APK package/version,
+and the final matching certificate. Existing implementation and test results
+were preserved rather than recreated. Real installation, process restart and
+APK-upgrade preservation still require validation on Galaxy Fold.
+Install over the existing app; do not uninstall or clear its data.
