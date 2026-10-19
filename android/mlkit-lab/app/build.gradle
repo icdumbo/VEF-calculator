@@ -28,8 +28,8 @@ android {
         applicationId 'org.vef.mlkitlab.diagnostic'
         minSdk 26
         targetSdk 36
-        versionCode 9
-        versionName '0.2.2-diagnostic-mapping1'
+        versionCode 10
+        versionName '0.2.2-diagnostic-mappingfix1'
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
@@ -41,6 +41,7 @@ android {
         main.java.srcDirs = ['src/diagnostic/java']
         test.java.srcDirs = ['src/diagnosticTest/java']
     }
+    testOptions.unitTests.includeAndroidResources = true
     testOptions.unitTests.all {
         workingDir rootProject.projectDir
         systemProperty 'mlkit.report', System.getenv('MLKIT_REPORT') ?: ''
@@ -64,6 +65,7 @@ dependencies {
     recoveryTool 'org.ow2.asm:asm-tree:9.5'
     baseline01 'junit:junit:4.13.2'
     testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.robolectric:robolectric:4.16.1'
     testImplementation 'org.ow2.asm:asm:9.5'
     testImplementation 'org.ow2.asm:asm-tree:9.5'
     testImplementation 'org.json:json:20240303'
@@ -83,4 +85,21 @@ tasks.register('testBaseline01', Test) {
     testClassesDirs = files(baselineClasses)
     classpath = files(baselineClasses) + configurations.baseline01
     testLogging { events 'passed', 'skipped', 'failed' }
+}
+
+
+// Android resource paths are relative to the app module. Keep legacy JVM
+// replay tests in the lab root, and run the Android view tests in the module.
+afterEvaluate {
+tasks.named('testDebugUnitTest') { exclude '**/ColumnMappingUiTest.class' }
+tasks.register('testMappingUi', Test) {
+    def original = tasks.named('testDebugUnitTest')
+    dependsOn original
+    testClassesDirs = original.get().testClassesDirs
+    classpath = original.get().classpath
+    workingDir project.projectDir
+    include '**/ColumnMappingUiTest.class'
+    testLogging { showStandardStreams = true; events 'passed', 'skipped', 'failed' }
+}
+tasks.named('check') { dependsOn 'testMappingUi' }
 }

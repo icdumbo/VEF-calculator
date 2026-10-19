@@ -21,3 +21,34 @@ Validation and real-device limitations will be appended after build checks. JVM 
 Validated: 70/70 Gradle tests (51 existing + 19 mapping tests), zero skipped/failures. Android Lint: 0 errors, 15 SetTextI18n warnings and 1 DrawAllocation warning. Additional 56/56 diagnostic tests passed against classes extracted from the final signed APK, executed in Codespace with private fixtures kept there.
 Real JSON replay: clear 324-element report -> 20 rows, 9 physical columns, explicit inspector mapping, 100 correct / 0 wrong / 0 missing. Latest Fold report -> all 100 original values unchanged, including the invalid quantity; 68 coherent unconfirmed candidates, 31 review candidates, 1 invalid. The 20 header-alias warnings are resolved by explicit inspector column confirmation, not by changing OCR text or suppressing confidence warnings. These are cached JSON replays, not new Android OCR results. Native mapping UI, native timings and cell rereads still require Galaxy Fold testing.
 Final APK: org.vef.mlkitlab.diagnostic; versionCode 9; versionName 0.2.2-diagnostic-mapping1. Existing MainActivity launcher and signing certificate retained. APK SHA256 3c74fec88ca71e9b47b9c162d9dd1b16b948bf1783e9c95d4db4dc38b5f4da90. No Internet permission; static APK branding scan passed. No private fixtures, signing keys, photos or local.properties committed.
+
+
+## mappingfix1: explicit column selectors
+
+The mapping1 device screenshot contains a selector between Column 1 samples
+and the Column 2 heading. It displays Port / Terminal, but has no column label
+of its own. Source inspection also confirms one Spinner is created for every
+physical column, starting at index zero. An actually omitted first Spinner is
+not demonstrated by that capture; the demonstrated defect is ambiguous visual
+ownership, compounded by implicit control sizing and an unlabelled dropdown.
+
+Each column now has a bordered card, an explicit Map Column N to field label,
+a full-width 56dp selector before the samples, a named dialog and a persistent
+Column N selection summary. Generated view IDs, zero-based physical-column
+tags and a captured physical-column index keep controls bound to their own
+column. Ignore remains a normal explicit choice for any column, including
+the first and last; there is no header-specific automatic Ignore assignment.
+
+Robolectric view tests exercise the actual Step 2 activity on Android API 28
+and 35, nine columns, narrow and wide widths, positive selector dimensions,
+unique IDs, first/last selectors, independent choices, Ignore, duplicate
+rejection and restored choices without rewriting stored selections.
+Run :app:testBaseline01 :app:testMappingUi :app:lintDebug. The view task uses
+the app-module working directory for Android resources; legacy replay tests
+keep their historical lab-root working directory. Robolectric is test-only
+and is not packaged in the offline APK.
+
+OCR, parser, geometry, cell rereads, review rules, the 20-voyage cap and the
+15-second cumulative processing deadline are unchanged. A real Galaxy Fold
+UI test is still required after installation; JVM view tests do not prove
+Samsung rendering or a new device OCR accuracy result.
