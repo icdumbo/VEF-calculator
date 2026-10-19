@@ -28,8 +28,8 @@ android {
         applicationId 'org.vef.mlkitlab.diagnostic'
         minSdk 26
         targetSdk 36
-        versionCode 8
-        versionName '0.2.2-diagnostic-cellretry1'
+        versionCode 9
+        versionName '0.2.2-diagnostic-mapping1'
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17

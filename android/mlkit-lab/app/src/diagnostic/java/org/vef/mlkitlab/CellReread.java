@@ -17,6 +17,9 @@ public final class CellReread {
         JSONObject rereads=CellRetryPolicy.run(parsed,original.getWidth(),original.getHeight(),(box,variant,timeout)-> {
             Bitmap crop=Bitmap.createBitmap(original,box[0],box[1],box[2]-box[0],box[3]-box[1]);
             // createBitmap may return its input. Never recycle the original document.
+            Bitmap masked=MappingImage.mask(crop,box);
+            if(masked!=crop&&crop!=original)crop.recycle();
+            crop=masked;
             Bitmap input=crop;
             if(variant==1) {
                 input=Bitmap.createBitmap(crop.getWidth()*2,crop.getHeight()*2,Bitmap.Config.ARGB_8888);

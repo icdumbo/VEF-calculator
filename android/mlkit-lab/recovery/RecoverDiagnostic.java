@@ -154,6 +154,13 @@ public final class RecoverDiagnostic {
             if(anchors!=1)throw new IllegalStateException("Expected one cell editor anchor");
             before.put(m.name+m.desc,instructions(m));
           }
+          if(cellRetry&&c.name.equals("org/vef/mlkitlab/MainActivity")&&m.name.equals("onCreate")) {
+            int entries=0;for(AbstractInsnNode n:m.instructions.toArray())if(n.getOpcode()==Opcodes.RETURN){
+              InsnList code=new InsnList();code.add(new VarInsnNode(Opcodes.ALOAD,0));code.add(new MethodInsnNode(Opcodes.INVOKESTATIC,"org/vef/mlkitlab/MappingEntry","install","(Lorg/vef/mlkitlab/MainActivity;)V",false));m.instructions.insertBefore(n,code);entries++;
+            }
+            if(entries!=1)throw new IllegalStateException("Expected one diagnostic activity completion");
+            before.put(m.name+m.desc,instructions(m));
+          }
           methods++;
         }
         if(parserFix&&c.name.equals("org/vef/mlkitlab/TableParser")) {
@@ -174,6 +181,11 @@ public final class RecoverDiagnostic {
           MethodNode head=new MethodNode(Opcodes.ACC_PUBLIC|Opcodes.ACC_STATIC,"diagnosticHead","(ILjava/util/List;)Ljava/lang/Object;",null,null);
           head.instructions.add(new TypeInsnNode(Opcodes.NEW,"org/vef/mlkitlab/TableParser$Head"));head.instructions.add(new InsnNode(Opcodes.DUP));head.instructions.add(new VarInsnNode(Opcodes.ILOAD,0));head.instructions.add(new VarInsnNode(Opcodes.ALOAD,1));head.instructions.add(new MethodInsnNode(Opcodes.INVOKESPECIAL,"org/vef/mlkitlab/TableParser$Head","<init>","(ILjava/util/List;)V",false));head.instructions.add(new InsnNode(Opcodes.ARETURN));
           c.methods.add(head);before.put(head.name+head.desc,instructions(head));
+        }
+        if(cellRetry&&c.name.equals("org/vef/mlkitlab/MainActivity")) {
+          MethodNode busy=new MethodNode(Opcodes.ACC_PUBLIC,"diagnosticIsBusy","()Z",null,null);
+          busy.instructions.add(new VarInsnNode(Opcodes.ALOAD,0));busy.instructions.add(new FieldInsnNode(Opcodes.GETFIELD,c.name,"active","Z"));busy.instructions.add(new InsnNode(Opcodes.IRETURN));
+          c.methods.add(busy);before.put(busy.name+busy.desc,instructions(busy));
         }
         c.version=Math.max(c.version,Opcodes.V1_8);
         ClassWriter w=new ClassWriter(ClassWriter.COMPUTE_FRAMES|ClassWriter.COMPUTE_MAXS){@Override protected String getCommonSuperClass(String a,String b){try{return super.getCommonSuperClass(a,b);}catch(Throwable ignored){return "java/lang/Object";}}};

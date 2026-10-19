@@ -14,6 +14,8 @@ public final class CellRetryPolicy {
     }
     /** Existing evidence only; padding is clipped before neighbouring evidence. No table reassignment. */
     public static int[] crop(TableParser.Result r, int row, int col, int width, int height) {
+        int[] confirmed=MappingCellCrops.get(row,col);
+        if(confirmed!=null){if(confirmed[0]<0||confirmed[1]<0||confirmed[2]>width||confirmed[3]>height||confirmed[2]<=confirmed[0]||confirmed[3]<=confirmed[1]||(long)(confirmed[2]-confirmed[0])*(confirmed[3]-confirmed[1])>1000000)return null;return confirmed;}
         List<TableParser.Token> evidence=r.evidence[row][col];
         if(evidence==null||evidence.isEmpty()) return null;
         float l=width,t=height,rr=0,b=0;
