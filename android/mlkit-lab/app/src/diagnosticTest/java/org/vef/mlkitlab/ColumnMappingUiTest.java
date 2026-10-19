@@ -131,4 +131,81 @@ public class ColumnMappingUiTest {
             }
         }
     }
+
+    private void field(Object target,String name,Object value)throws Exception {
+        Field f=MappingActivity.class.getDeclaredField(name);f.setAccessible(true);f.set(target,value);
+    }
+    private Object field(Object target,String name)throws Exception {
+        Field f=MappingActivity.class.getDeclaredField(name);f.setAccessible(true);return f.get(target);
+    }
+    private String visibleText(View v) {
+        StringBuilder s=new StringBuilder();if(v instanceof TextView)s.append(((TextView)v).getText()).append(' ');
+        if(v instanceof ViewGroup)for(int i=0;i<((ViewGroup)v).getChildCount();i++)s.append(visibleText(((ViewGroup)v).getChildAt(i)));
+        return s.toString();
+    }
+    private List<EditText> edits(View v){
+        List<EditText> out=new ArrayList<>();if(v instanceof EditText)out.add((EditText)v);
+        else if(v instanceof ViewGroup)for(int i=0;i<((ViewGroup)v).getChildCount();i++)out.addAll(edits(((ViewGroup)v).getChildAt(i)));
+        return out;
+    }
+    private void await(java.util.function.BooleanSupplier condition)throws Exception {
+        long end=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+        do {shadowOf(Looper.getMainLooper()).idle();if(condition.getAsBoolean())return;Thread.sleep(10);}while(System.nanoTime()<end);
+        fail("Asynchronous mapping step did not finish");
+    }
+    private String readUtf8(java.nio.file.Path p)throws java.io.IOException {return new String(java.nio.file.Files.readAllBytes(p),java.nio.charset.StandardCharsets.UTF_8);}
+    private org.json.JSONObject realReport()throws Exception {
+        String path=System.getenv("MLKIT_HEADERFIX_RESULT");assertNotNull("Private device fixture required",path);
+        return new org.json.JSONObject(readUtf8(java.nio.file.Paths.get(path)));
+    }
+    @Test public void rawOcrWithoutLayoutUsesSeparateDetectionWithoutChangingRaw()throws Exception {
+        org.json.JSONObject raw=realReport();raw.remove("layout");String before=raw.toString();
+        try {raw.getJSONObject("layout");fail("Old loader must reproduce the missing-layout failure");}
+        catch(org.json.JSONException expected) { }
+        ColumnLayout layout=ColumnLayout.detect(ColumnLayout.tokens(raw.getJSONArray("tokensInOrientedOcrPixels")),raw.getInt("ocrWidth"),raw.getInt("ocrHeight"));
+        org.json.JSONObject geometry=layout.json();org.json.JSONObject result=new org.json.JSONObject().put("mapping",new org.json.JSONObject().put("layout",geometry));
+        ColumnLayout restored=MappingActivity.savedDetectedLayout(raw,result,new org.json.JSONObject().put("layout",geometry));
+        assertEquals(layout.bounds,restored.bounds);assertEquals(20,restored.rows.size());assertEquals(9,restored.columns());assertEquals(before,raw.toString());
+    }
+    @Test public void confirmNineColumnsWithFourIgnoredOpensOneHundredReviewValues()throws Exception { completedMapping(false); }
+    @Test public void completedMappingResumesWithoutDetectionFileAndPreservesInvalidValue()throws Exception { completedMapping(true); }
+    private void completedMapping(boolean missingDetection)throws Exception {
+        var controller=Robolectric.buildActivity(MappingActivity.class).setup();MappingActivity activity=controller.get();
+        org.json.JSONObject raw=realReport();raw.remove("layout");String session="map-test-confirm";
+        ColumnLayout detected=ColumnLayout.detect(ColumnLayout.tokens(raw.getJSONArray("tokensInOrientedOcrPixels")),raw.getInt("ocrWidth"),raw.getInt("ocrHeight"));
+        int[] choices={-1,0,1,2,3,4,-1,-1,-1};assertEquals(9,detected.columns());
+        java.io.File logs=new java.io.File(activity.getFilesDir(),"diagnostics"),cache=new java.io.File(activity.getFilesDir(),"mapping-cache");logs.mkdirs();cache.mkdirs();
+        String rawName=session+"-mapping-raw.json",detectName=session+"-mapping-detect.json",resultName=session+"-completed-mapping-result.json";
+        MappingOcrService.save(new java.io.File(logs,rawName),raw);
+        java.io.File detectionFile=new java.io.File(logs,detectName);
+        if(!missingDetection)MappingOcrService.save(detectionFile,new org.json.JSONObject(raw.toString()).put("layout",detected.json()));
+        android.graphics.Bitmap photo=android.graphics.Bitmap.createBitmap(16,16,android.graphics.Bitmap.Config.ARGB_8888);
+        try(var out=new java.io.FileOutputStream(new java.io.File(cache,session+".input"))){photo.compress(android.graphics.Bitmap.CompressFormat.PNG,100,out);}photo.recycle();
+        field(activity,"session",session);field(activity,"detectFile",detectName);field(activity,"layout",detected);field(activity,"detected",detected);field(activity,"choices",choices);
+        Method show=MappingActivity.class.getDeclaredMethod("showMapping");show.setAccessible(true);show.invoke(activity);
+        Method confirm=MappingActivity.class.getDeclaredMethod("confirm");confirm.setAccessible(true);confirm.invoke(activity);
+        java.io.File selectionFile=new java.io.File(cache,session+"-selection.json");await(selectionFile::exists);
+        final android.content.Intent[] started={null};await(()->{started[0]=shadowOf(activity.getApplication()).getNextStartedService();return started[0]!=null;});
+        assertEquals("apply",started[0].getAction());assertEquals(session,started[0].getStringExtra("session"));
+        org.json.JSONObject selection=MappingOcrService.read(selectionFile);for(int i=0;i<9;i++)assertEquals(choices[i],selection.getJSONArray("choices").getInt(i));
+        assertTrue(selection.getBoolean("confirmedByInspector"));assertFalse(selection.getBoolean("valuesConfirmed"));
+        MappingRows mapped=new MappingRows(detected,choices);
+        assertEquals(100,mapped.result.associatedCells);assertEquals("6362.5776",mapped.result.cells[2][3]);assertEquals("invalid",mapped.result.status[2][3]);
+        org.json.JSONObject result=mapped.report().put("session",session).put("rawOcrFile",rawName).put("mapping",selection).put("usedActiveMs",100).put("cellOcrCalls",0);
+        MappingOcrService.save(new java.io.File(logs,resultName),result);
+        String rawBefore=readUtf8(new java.io.File(logs,rawName).toPath()),selectionBefore=readUtf8(selectionFile.toPath());
+        android.os.Bundle response=new android.os.Bundle();response.putString("session",session);response.putString("resultFile",resultName);
+        ((android.os.ResultReceiver)started[0].getParcelableExtra("receiver")).send(2,response);
+        View root=activity.findViewById(android.R.id.content);await(()->visibleText(root).contains("Step 3"));
+        assertFalse((Boolean)field(activity,"busy"));List<EditText> values=edits(root);assertEquals(100,values.size());
+        for(int r=0;r<20;r++)for(int c=0;c<5;c++)assertEquals(mapped.result.cells[r][c],values.get(r*5+c).getText().toString());
+        assertTrue(visibleText(root).contains("Review Required"));assertFalse(visibleText(root).contains("Cannot load saved results"));
+        assertEquals(rawBefore,readUtf8(new java.io.File(logs,rawName).toPath()));assertEquals(selectionBefore,readUtf8(selectionFile.toPath()));
+        controller.pause().stop().destroy();
+        try(var resumed=Robolectric.buildActivity(MappingActivity.class).setup()) {
+            View resumedRoot=resumed.get().findViewById(android.R.id.content);await(()->visibleText(resumedRoot).contains("Step 3"));
+            assertEquals(100,edits(resumedRoot).size());assertEquals("6362.5776",edits(resumedRoot).get(13).getText().toString());
+            assertTrue(visibleText(resumedRoot).contains("Review Required"));
+        }
+    }
 }

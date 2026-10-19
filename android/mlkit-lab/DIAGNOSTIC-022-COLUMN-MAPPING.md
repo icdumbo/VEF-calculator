@@ -52,3 +52,32 @@ OCR, parser, geometry, cell rereads, review rules, the 20-voyage cap and the
 15-second cumulative processing deadline are unchanged. A real Galaxy Fold
 UI test is still required after installation; JVM view tests do not prove
 Samsung rendering or a new device OCR accuracy result.
+
+
+## confirmfix1: load completed mapping results
+
+Root cause: raw OCR is saved before physical-column detection and intentionally
+has no layout property. Confirm Mapping saves the selection and the worker
+can finish successfully, but the result loader then demanded layout from the
+raw OCR file. The resulting missing-layout exception prevented Step 3 from
+being rendered. The saved-results error is therefore the display blocker,
+not a rejection of the valid five-field/four-Ignore mapping.
+
+Read original geometry from the separate detection file. Preserve compatibility
+with older raw files containing geometry, and fall back to the completed
+result's confirmed mapping when the detection file is unavailable. This is a
+read-only recovery path: no migration, removal or rewriting of existing OCR,
+results, profiles or diagnostics. Reopening a completed result runs no OCR.
+Disable repeat confirmation while a saved result is loading, then restore
+controls on success or failure. Keep the existing error message and state on
+failure with an explicit assurance that saved diagnostics are retained.
+
+Android view regression tests use the saved device JSON, confirm nine physical
+columns with five fields and four Ignore choices, inspect the apply request,
+simulate the completed worker response, and verify 100 displayed original
+values including the invalid four-decimal quantity. They also reopen the saved
+result after activity recreation, with and without the separate detection file.
+The test does not run native ML Kit or cell rereads; it exercises the real UI,
+file loading and worker/UI data contract. Phone confirmation remains required.
+
+Validation: 84/84 tests passed (14 Android view cases on API 28 and 35), Android Lint 0 errors / 19 warnings, debug assembly passed. 56/56 regressions also passed against classes extracted from the final signed APK. Native Galaxy Fold confirmation remains pending.
