@@ -10,7 +10,7 @@ public final class CellRetryPolicy {
     public interface Engine { JSONObject read(int[] crop, int variant, long timeoutMs) throws Exception; }
     public interface Control { long now(); long elapsed(); boolean running(); void persist(JSONObject state) throws Exception; }
     public static boolean valid(int col, String text) {
-        return col == 1 ? TableParser.date(text) : col >= 3 ? TableParser.quantity(text) : !text.trim().isEmpty();
+        return col == 1 ? ObservedDates.valid(text) : col >= 3 ? TableParser.quantity(text) : !text.trim().isEmpty();
     }
     /** Existing evidence only; padding is clipped before neighbouring evidence. No table reassignment. */
     public static int[] crop(TableParser.Result r, int row, int col, int width, int height) {
